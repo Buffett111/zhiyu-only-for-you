@@ -26,7 +26,7 @@ async function enqueueTrackedHistory() {
 }
 async function digestPipeline() {
   // Save an honest partial digest even if one upstream is unavailable. A later retry updates the same row.
-  const outcomes = [...await jobs.syncMarket(), await jobs.syncFundamentals(), await jobs.syncNews()];
+  const outcomes = [...await jobs.syncMarket(), ...await jobs.syncInternational(), await jobs.syncFundamentals(), await jobs.syncNews()];
   report(outcomes);
   const count = await jobs.generateDigests();
   console.info(JSON.stringify({ event: 'digest-generated', count }));
@@ -44,7 +44,7 @@ async function shutdown() {
 async function main() {
   await migrate(pool);
   if (once) {
-    const outcomes = [...await jobs.syncMarket(), await jobs.syncFundamentals(), await jobs.syncNews()];
+    const outcomes = [...await jobs.syncMarket(), ...await jobs.syncInternational(), await jobs.syncFundamentals(), await jobs.syncNews()];
     report(outcomes);
     const history = await jobs.backfillHistory();
     report(history);
@@ -59,7 +59,7 @@ async function main() {
   boss.on('error', error => console.error(JSON.stringify({ event: 'queue-error', message: safeError(error) })));
   await boss.start();
   for (const name of QUEUES) {
-    await boss.createQueue(name, { policy: name === 'digest.generate' ? 'stately' : 'exclusive', retryLimit: 2, retryDelay: 120, retryBackoff: true, expireInSeconds: 3600 });
+    await boss.createQueue(name, { policy: name === 'digest.generate' ? 'stately' : 'exclusive', retryLimit: name === 'international.sync' ? 0 : 2, retryDelay: 120, retryBackoff: true, expireInSeconds: 3600 });
   }
   await boss.work('market.sync', { batchSize: 1 }, async () => {
     const outcomes = await jobs.syncMarket(); report(outcomes);
@@ -67,6 +67,10 @@ async function main() {
   });
   await boss.work('news.sync', { batchSize: 1 }, async () => {
     const outcome = await jobs.syncNews(); report(outcome); requireRetry([outcome]);
+  });
+  await boss.work('international.sync', { batchSize: 1 }, async () => {
+    const outcomes = await jobs.syncInternational(); report(outcomes);
+    if (outcomes.some(outcome => outcome.count > 0)) await jobs.generateDigests();
   });
   await boss.work('fundamentals.sync', { batchSize: 1 }, async () => {
     const outcome = await jobs.syncFundamentals(); report(outcome); requireRetry([outcome]);
@@ -78,6 +82,8 @@ async function main() {
   await boss.work('digest.generate', { batchSize: 1 }, digestPipeline);
   const scheduleOptions = { tz: 'Asia/Taipei', singletonKey: GLOBAL_JOB_KEY, retryLimit: 2, retryDelay: 120, retryBackoff: true };
   await boss.schedule('market.sync', '30 16 * * 1-5', {}, scheduleOptions);
+  // Hourly recovery check, while the handler caches completed sessions and limits retries.
+  await boss.schedule('international.sync', '10 * * * *', {}, { ...scheduleOptions, retryLimit: 0 });
   await boss.schedule('news.sync', '0 * * * *', {}, scheduleOptions);
   await boss.schedule('digest.generate', '30 20 * * *', {}, scheduleOptions);
 

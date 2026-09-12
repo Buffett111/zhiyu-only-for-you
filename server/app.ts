@@ -13,10 +13,12 @@ import type { Config } from './config';
 import { modules, defaultModuleState, migrateModuleState, financeModule } from '../shared/modules';
 import type { User, Security, ModuleState, SourceStatus, Quote, Fundamentals, Digest } from '../shared/types';
 import { enqueueHistory } from './jobs';
+import { searchYahoo, YahooUnavailable } from './providers/yahoo';
+import { regionOf, exchangeDate, timeZoneOf } from '../shared/markets';
 
 declare module 'fastify' { interface FastifyRequest { zhiyuUser: User; } }
 export interface JobQueue { send(name: string, data?: object, options?: object): Promise<unknown>; }
-interface AppOptions { pool: Pool; config: Config; queue?: JobQueue; verifyIdentity?: (request: FastifyRequest) => Promise<Identity>; logger?: boolean; }
+interface AppOptions { pool: Pool; config: Config; queue?: JobQueue; verifyIdentity?: (request: FastifyRequest) => Promise<Identity>; logger?: boolean; yahooSearch?: typeof searchYahoo; }
 const dateOnly = (v: string | Date) => typeof v === 'string' ? v.slice(0, 10) : v.toISOString().slice(0, 10);
 const iso = (v: Date | string | null) => v ? new Date(v).toISOString() : null;
 export function mapSecurity(row: Record<string, any>): Security {
@@ -24,6 +26,7 @@ export function mapSecurity(row: Record<string, any>): Security {
 }
 function moduleState(row: Record<string, any>): ModuleState { return migrateModuleState({ moduleId: row.module_id, enabled: row.enabled, configVersion: row.config_version, config: row.config, widgets: row.widgets }); }
 function missingFundamentals(security: Security): Fundamentals {
+  if (regionOf(security.market) !== 'TW') return { securityId: security.id, asOf: '', revenuePeriod: null, earningsPeriod: null, basis: 'annual', revenue: null, revenueYoy: null, eps: null, grossMargin: null, operatingMargin: null, unit: security.currency, sourceUrl: security.sourceUrl, availability: security.assetType === 'etf' ? 'not_applicable' : 'unsupported' };
   return { securityId: security.id, asOf: '', revenuePeriod: null, earningsPeriod: null, basis: 'cumulative', revenue: null, revenueYoy: null, eps: null, grossMargin: null, operatingMargin: null, unit: '新台幣千元；EPS 為元', sourceUrl: security.sourceUrl, availability: security.assetType === 'etf' ? 'not_applicable' : /金融|保險|銀行|證券/.test(security.sector || '') ? 'unsupported' : 'missing' };
 }
 const watchSchema = z.object({ held: z.boolean(), interested: z.boolean(), group: z.string().trim().min(1).max(40).default('我的清單') }).strict();
@@ -40,13 +43,14 @@ export function historyWindow(today: string, range: '1m' | '3m' | '1y') {
   return { requestedFrom: from.toISOString().slice(0, 10), months };
 }
 
-export async function buildApp({ pool, config, queue, verifyIdentity = createIdentityVerifier(config), logger = true }: AppOptions) {
+export async function buildApp({ pool, config, queue, verifyIdentity = createIdentityVerifier(config), logger = true, yahooSearch = searchYahoo }: AppOptions) {
   const app = Fastify({ logger: logger ? { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["cf-access-jwt-assertion"]', 'res.headers["set-cookie"]'] } : false, disableRequestLogging: true, bodyLimit: 16384, trustProxy: false });
   await app.register(helmet, { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"] } } });
   app.decorateRequest('zhiyuUser', null as unknown as User);
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ error: '輸入格式不正確，請檢查欄位。' });
     if (error instanceof AccessError) return reply.code(error.statusCode).send({ error: error.message });
+    if (error instanceof YahooUnavailable) return reply.code(424).send({ error: error.message });
     const status = (error as {statusCode?: number}).statusCode;
     if (status && status >= 400 && status < 500) return reply.code(status).send({ error: status === 429 ? '操作太頻繁，請稍後再試。' : '無法處理此請求。' });
     request.log.error({ errorType: error instanceof Error ? error.name : 'Error', code: (error as any)?.code }, 'Request failed');
@@ -117,10 +121,23 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     return moduleState(result.rows[0]);
   });
   app.get('/api/v1/sources', getSources);
-  app.get<{ Querystring: { q?: string } }>('/api/v1/finance/securities', { preHandler: requireFinance }, async request => {
+  app.get<{ Querystring: { q?: string; region?: string } }>('/api/v1/finance/securities', { preHandler: requireFinance, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async request => {
     const q = z.string().trim().max(80).parse(request.query.q || '');
+    const region = z.enum(['TW', 'US', 'JP']).parse(request.query.region || 'TW');
+    if (region !== 'TW') {
+      if (!q) return [];
+      const securities = await yahooSearch(q, region);
+      for (const security of securities) {
+        if (regionOf(security.market) !== region) continue;
+        await pool.query(`INSERT INTO securities(id,symbol,name,market,asset_type,currency,aliases,source_url,active)
+          VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,true) ON CONFLICT(id) DO UPDATE SET
+          name=EXCLUDED.name,asset_type=EXCLUDED.asset_type,aliases=EXCLUDED.aliases,source_url=EXCLUDED.source_url,active=true,updated_at=now()`,
+          [security.id, security.symbol, security.name, security.market, security.assetType, security.currency, JSON.stringify(security.aliases), security.sourceUrl]);
+      }
+      return securities.filter(security => regionOf(security.market) === region);
+    }
     const search = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
-    const result = await pool.query("SELECT * FROM securities WHERE active AND ($1='' OR symbol ILIKE $2 OR name ILIKE $2 OR aliases::text ILIKE $2) ORDER BY CASE WHEN symbol=$1 THEN 0 ELSE 1 END,symbol LIMIT 50", [q, search]);
+    const result = await pool.query("SELECT * FROM securities WHERE active AND market IN ('TWSE','TPEx') AND ($1='' OR symbol ILIKE $2 OR name ILIKE $2 OR aliases::text ILIKE $2) ORDER BY CASE WHEN symbol=$1 THEN 0 ELSE 1 END,symbol LIMIT 50", [q, search]);
     return result.rows.map(mapSecurity);
   });
   app.get('/api/v1/finance/watchlist', { preHandler: requireFinance }, async request => watchlist(request.zhiyuUser.id));
@@ -156,9 +173,9 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     return { security, quote: q.rows[0]?.data || null, fundamentals: security.assetType === 'etf' ? missingFundamentals(security) : f.rows[0]?.data || missingFundamentals(security), news: n.rows.map(r => r.data) };
   });
   app.get<{ Params: { id: string }; Querystring: { range?: string } }>('/api/v1/finance/securities/:id/history', { preHandler: requireFinance }, async request => {
-    await getSecurity(request.params.id);
+    const security = await getSecurity(request.params.id);
     const range = z.enum(['1m', '3m', '1y']).parse(request.query.range || '3m');
-    const { requestedFrom, months } = historyWindow(taipeiToday(), range);
+    const { requestedFrom, months } = historyWindow(exchangeDate(new Date(), timeZoneOf(security.market)), range);
     const rows = await pool.query('SELECT data FROM quotes WHERE security_id=$1 AND date >= $2 ORDER BY date', [request.params.id, requestedFrom]);
     const quotes: Quote[] = rows.rows.map(r => r.data);
     const progress = await pool.query('SELECT month,status FROM history_progress WHERE security_id=$1 AND month=ANY($2::text[])', [request.params.id, months]);

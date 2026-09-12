@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { XMLParser } from 'fast-xml-parser';
-import type { Fundamentals, Market, NewsItem, Quote, Security } from '../../shared/types.js';
+import type { Fundamentals, TaiwanMarket as Market, NewsItem, Quote, Security } from '../../shared/types.js';
 
 export type Row = Record<string, unknown>;
 export function field(row: Row, ...names: string[]): unknown {

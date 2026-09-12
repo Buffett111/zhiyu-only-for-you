@@ -1,4 +1,5 @@
-import type { Fundamentals, Market, MarketSnapshot, NewsItem, ProviderResult, Quote, Security } from '../../shared/types.js';
+import type { Fundamentals, TaiwanMarket as Market, MarketSnapshot, NewsItem, ProviderResult, Quote, Security } from '../../shared/types.js';
+export { fetchInternationalHistory } from './yahoo.js';
 import { officialJson, officialText } from './http.js';
 import { enrichSecurities, field, financialApplicability, parseAnnouncements, parseCnaRss, parseDate, parseFundamental, parseHistory, parseIsin, parseQuote, rows, stripHtml, symbolOf, text, type Row } from './parsers.js';
 
@@ -93,6 +94,7 @@ export async function fetchFundamentals(securities: Security[]): Promise<Provide
 }
 
 export function historyUrl(security: Security, month: string): string {
+  if (!['TWSE', 'TPEx'].includes(security.market)) throw new Error('國際行情使用 Yahoo adapter');
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || !parseDate(`${month}-01`) || !/^[A-Z0-9]{4,8}$/.test(security.symbol)) throw new Error('無效的股票代號或歷史月份');
   if (security.market === 'TWSE') {
     const url = new URL('https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY');

@@ -1,6 +1,8 @@
 # 知隅｜Only for You
 
-給自己與親友的個人資訊角落。第一個模組是台股／ETF 收盤追蹤：私人自選清單、未還原價格走勢、公司基本面、新聞公告與每天 20:30 的摘要。
+給自己與親友的個人資訊角落。財經模組支援台股、美股與日股的股票／ETF 收盤追蹤：私人自選清單、原幣日線與每天 20:30 的摘要。台股另有公司基本面與新聞公告；美日這兩項功能尚未接入。
+
+美股與日股試用 `yahoo-finance2`，不用申請 API key 或付費；新增追蹤時補抓最近一年可取得的日線，每小時檢查已完成交易日。這是非官方介接，來源異常時保留舊行情並顯示提示。台股採交易所來源、未還原價格；Yahoo 使用拆股調整的 Close，不使用含股息調整的 Adj Close。
 
 ## 本機執行
 
@@ -34,6 +36,7 @@ npm run dev
 | `npm run cf:check` | 依本機設定執行 Worker 部署乾跑，不發布 |
 | `npm run sources:verify -- --month=2026-08` | 四種標的的真實行情、歷史、財報與新聞驗證 |
 | `npm exec -- tsx --use-system-ca scripts/verify-pipeline.ts --month=2026-08` | 真實來源與 PostgreSQL 整合驗證，僅寫入暫存隔離 schema |
+| `npm exec -- tsx --use-system-ca scripts/verify-yahoo.ts --ui` | 四種美日標的的真實來源、帳號隔離、重啟去重與桌面／手機驗證；需要 Chrome，僅使用隔離 schema 與連接埠 3003 |
 | `powershell -File scripts/start-services.ps1` | 啟動 API、背景排程與已設定的私有 Tunnel |
 
 ## 文件
@@ -44,6 +47,6 @@ npm run dev
 - [美股、日股免費資料來源調研](docs/international-data-survey.md)
 - [驗證紀錄](docs/verification.md)
 
-本機版本已通過 60 項測試、正式建置與真實資料管線驗證；完整範圍見[驗證紀錄](docs/verification.md)。公開部署需自行設定 Cloudflare 帳號、Access 邀請名單及本機 Tunnel；程式庫不包含可共用的服務帳號或部署憑證。
+本機版本已通過 75 項測試、正式建置與真實資料管線驗證；完整範圍見[驗證紀錄](docs/verification.md)。公開部署需自行設定 Cloudflare 帳號、Access 邀請名單及本機 Tunnel；程式庫不包含可共用的服務帳號或部署憑證。
 
 `.env`、`wrangler.local.jsonc`、資料、執行紀錄與備份均排除於 Git。請另行保存備份密語；缺少密語便無法解密。共享此站給親友時，依部署文件啟用正式登入。

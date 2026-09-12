@@ -1,5 +1,5 @@
 import type { ModuleDefinition, ModuleState } from './types';
-export const financeModule: ModuleDefinition = { id: 'finance', name: '財經', description: '每天留意你的持股，讀懂市場裡與你有關的變化。', version: '1.0.0', configVersion: 1, icon: 'chart', routes: ['/finance'], jobs: ['market.sync', 'news.sync', 'history.backfill', 'digest.generate'], widgets: [
+export const financeModule: ModuleDefinition = { id: 'finance', name: '財經', description: '追蹤台股、美股與日股，每天留意你關心的市場變化。', version: '1.1.0', configVersion: 1, icon: 'chart', routes: ['/finance'], jobs: ['market.sync', 'international.sync', 'news.sync', 'history.backfill', 'digest.generate', 'fundamentals.sync'], widgets: [
   { id: 'digest', name: '每日摘要', description: '把追蹤標的今天的變化，整理成一份閱讀筆記。' },
   { id: 'watchlist', name: '我的追蹤', description: '持有與感興趣的股票、ETF，集中在這裡。' },
   { id: 'chart', name: '價格走勢', description: '日收盤走勢與成交量，查看近一年的變化。' },

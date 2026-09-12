@@ -1,11 +1,13 @@
-export type Market = 'TWSE' | 'TPEx';
+export type TaiwanMarket = 'TWSE' | 'TPEx';
+export type Market = TaiwanMarket | 'NASDAQ' | 'NYSE' | 'NYSEARCA' | 'NYSEAMERICAN' | 'CBOE' | 'TSE';
+export type Region = 'TW' | 'US' | 'JP';
 export type AssetType = 'stock' | 'etf';
 export interface User { id: string; email: string; displayName: string; role: 'admin' | 'member'; }
 export interface WidgetDefinition { id: string; name: string; description: string; }
 export interface ModuleDefinition { id: string; name: string; description: string; version: string; configVersion: number; icon: string; widgets: WidgetDefinition[]; routes: string[]; jobs: string[]; }
 export interface ModuleState { moduleId: string; enabled: boolean; configVersion: number; config: Record<string, unknown>; widgets: string[]; }
-export interface Security { id: string; symbol: string; name: string; market: Market; assetType: AssetType; currency: 'TWD'; sector?: string; aliases: string[]; sourceUrl: string; active?: boolean; }
-export interface Quote { securityId: string; date: string; open: number | null; high: number | null; low: number | null; close: number | null; volume: number | null; change: number | null; changePercent: number | null; source: string; fetchedAt: string; priceType: 'eod'; dataset?: 'snapshot' | 'history'; volumePrecision?: 'shares' | 'thousand_shares'; status: 'traded' | 'no_trade' | 'suspended'; }
+export interface Security { id: string; symbol: string; name: string; market: Market; assetType: AssetType; currency: 'TWD' | 'USD' | 'JPY'; sector?: string; aliases: string[]; sourceUrl: string; active?: boolean; }
+export interface Quote { securityId: string; date: string; open: number | null; high: number | null; low: number | null; close: number | null; volume: number | null; change: number | null; changePercent: number | null; source: string; fetchedAt: string; priceType: 'eod'; adjustment?: 'unadjusted' | 'split_adjusted'; qualityWarning?: string; dataset?: 'snapshot' | 'history'; volumePrecision?: 'shares' | 'thousand_shares'; status: 'traded' | 'no_trade' | 'suspended'; }
 export interface Fundamentals { securityId: string; asOf: string; revenuePeriod: string | null; earningsPeriod: string | null; basis: 'cumulative' | 'quarter' | 'annual'; revenue: number | null; revenueYoy: number | null; eps: number | null; grossMargin: number | null; operatingMargin: number | null; unit: string; sourceUrl: string; sourceUrls?: string[]; fetchedAt?: string; availability: 'available' | 'not_applicable' | 'unsupported' | 'missing'; }
 export interface NewsItem { id: string; title: string; url: string; publishedAt: string; source: string; kind: 'news' | 'announcement'; securityIds: string[]; matchType: 'exact' | 'market'; }
 export interface WatchlistEntry { securityId: string; held: boolean; interested: boolean; group: string; createdAt: string; security: Security; quote: Quote | null; }
