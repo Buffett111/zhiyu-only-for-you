@@ -65,7 +65,8 @@ const client = createYahooClient(fetch, (url, body) => {
 export async function yahooFinancialSource(symbol: string, type: 'annual' | 'quarterly', now = new Date()): Promise<unknown> {
   assertYahooSymbol(symbol);
   const key = `${symbol}:${type}`; financialResponses.delete(key);
-  const from = new Date(now); from.setUTCFullYear(from.getUTCFullYear() - 3);
+  // Request a decade; Yahoo may return a shorter window. Preserve every returned period.
+  const from = new Date(now); from.setUTCFullYear(from.getUTCFullYear() - 10);
   try {
     await client.fundamentalsTimeSeries(symbol, { period1: from, period2: now, type, module: 'all' });
     const raw = financialResponses.get(key); if (!raw) throw new YahooUnavailable('Yahoo 財報回應缺少原始幣別資料。');

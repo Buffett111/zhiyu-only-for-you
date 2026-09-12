@@ -55,3 +55,5 @@ Access JWT 驗证 issuer、audience、RS256 簽章、有效期與 email 邀請�
 國際搜尋不寫資料庫；加入清單才將已驗證、尚未過期的候選保存。`SecurityDetail` 新增可選的 financialReports／contentStatus；舊回應欄位保持相容。財經設定新增可選 translationTarget（zh-TW／en／ja），configVersion 仍為 1，舊帳號預設繁中。
 
 翻譯入口由 `shared/translation.ts` 建立，前端只在點擊後開啟外部譯文。資料庫不保存翻譯全文。市場快取清理由 `pruneMarketCache` 執行，期限見資料來源文件；不刪除私人清單、設定或摘要。
+
+長期分析修正：財報視為長期保存的結構化資料，取消每檔 5 季／3 年截斷及無人追蹤 30 天刪除；來源只回傳近期資料時，既存較早期別維持不變。Yahoo 每次查詢近十年且保存所有可得期別，實際不足十年時明確顯示涵蓋區間；仍僅抓取啟用追蹤聯集。此修改沿用 003 結構與既有設定，無須資料庫遷移。未保存到的舊資料無法僅靠修改保留規則恢復。

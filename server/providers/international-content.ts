@@ -52,7 +52,7 @@ export function parseFinancialReports(raw: unknown, security: Security, basis: '
       sourceUrl: `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}/financials/`, fetchedAt: now.toISOString() });
   }
   items.sort((a,b) => b.periodEnd.localeCompare(a.periodEnd));
-  return { items: items.slice(0, basis === 'quarter' ? 5 : 3), dataDate: items[0]?.periodEnd, warnings: [...new Set(warnings)] };
+  return { items, dataDate: items[0]?.periodEnd, warnings: [...new Set(warnings)] };
 }
 export async function fetchInternationalFinancials(security: Security, now = new Date()): Promise<ProviderResult<FinancialReport>> {
   if (security.assetType === 'etf') return { items: [], warnings: [] };

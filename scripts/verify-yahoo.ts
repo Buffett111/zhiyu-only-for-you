@@ -117,6 +117,11 @@ try {
     await expect(page.locator('.news-card .translation-links a').first()).toHaveAttribute('href',/tl=en/);
     await page.locator('.report-tabs').getByRole('button',{name:'年度',exact:true}).click();
     await expect(page.locator('.fundamentals-card')).toContainText('12 個月');
+    await expect(page.locator('.fundamentals-card')).toContainText('向來源查詢近 10 年');
+    await page.locator('.report-history summary').click();
+    await expect(page.getByRole('region',{name:'歷年財報比較表'})).toBeVisible();
+    assert.ok(await page.locator('.report-history tbody tr').count() >= 4);
+    await page.screenshot({path:'.cache/qa-financial-history-desktop.png',fullPage:true});
     await page.locator('.security-cell').filter({ hasText: '1306' }).click();
     await expect(page.getByRole('heading', { name: '用適合 ETF 的方式觀察' })).toBeVisible();
     await page.getByRole('button', { name: '1年', exact: true }).click();
@@ -136,6 +141,9 @@ try {
     assert.ok(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await expect(mobile.getByRole('combobox',{name:'翻譯目標語言'})).toHaveValue('en');
     await expect(mobile.locator('.fundamentals-card')).toContainText('USD 百萬');
+    await mobile.locator('.report-history summary').click();
+    await expect(mobile.getByRole('region',{name:'歷年財報比較表'})).toBeVisible();
+    assert.ok(await mobile.evaluate(()=>document.documentElement.scrollWidth <= innerWidth));
     await mobile.screenshot({ path: '.cache/qa-yahoo-mobile.png', fullPage: true });
     const other = await browser.newPage({ extraHTTPHeaders: { 'x-person': 'b' } }); await other.goto(base);
     await expect(other.locator('.watchlist-table tbody tr')).toHaveCount(1);

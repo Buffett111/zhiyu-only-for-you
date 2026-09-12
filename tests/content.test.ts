@@ -22,6 +22,11 @@ function japanHtml(code='7203.T',time='9/11') {
  return `<script>self.__next_f.push(${JSON.stringify([1,`a:${JSON.stringify(data)}\n`])})</script>`;
 }
 describe('financial statements, source news and translation boundaries',()=>{
+ it.each([['quarter','quarterly','3M',24],['annual','annual','12M',10]] as const)('keeps all available %s periods beyond the former cap', (basis,prefix,periodType,count)=>{
+  const points=Array.from({length:count},(_,i)=>({asOfDate:basis==='annual'?`${2016+i}-12-31`:`${2020+Math.floor(i/4)}-${['03-31','06-30','09-30','12-31'][i%4]}`,periodType,currencyCode:'USD',reportedValue:{raw:i}}));
+  const data={timeseries:{result:[{meta:{symbol:['AAPL']},[`${prefix}TotalRevenue`]:points}]}};
+  expect(parseFinancialReports(data,us,basis,now).items).toHaveLength(count);
+ });
  it('preserves zero EPS and gross profit, negative cash flow and original reporting currency',()=>{
   const result=parseFinancialReports(raw('JPY'),us,'quarter',now);
   expect(result.items[0]).toMatchObject({currency:'JPY',eps:0,epsType:'diluted',grossProfit:0,grossMargin:0,operatingMargin:10,operatingCashFlow:-20,totalAssets:500,totalLiabilities:null});
@@ -109,12 +114,28 @@ describe('on-demand content, saved preferences and bounded public cache',()=>{
   expect((await app.inject({url:'/api/v1/bootstrap',headers})).json().states[0].config.translationTarget).toBe('ja');
   expect((await app.inject({url:'/api/v1/bootstrap'})).json().states[0].config.translationTarget).toBeUndefined();
  });
- it('limits old public data without deleting private selections',async()=>{
+ it('preserves old tracked prices and financial archives while cleaning transient caches',async()=>{
   await search();await add();await createContentJobs(pool,providers).syncContent(now);
   await pool.query("INSERT INTO quotes(security_id,date,data,fetched_at) VALUES($1,'2024-01-01','{}','2024-01-01')",[us.id]);
   await pruneMarketCache(pool,now);
-  expect(Number((await pool.query('SELECT count(*) FROM quotes')).rows[0].count)).toBe(0);
+  expect(Number((await pool.query('SELECT count(*) FROM quotes')).rows[0].count)).toBe(1);
   expect(Number((await pool.query('SELECT count(*) FROM watchlist')).rows[0].count)).toBe(1);
   expect(Number((await pool.query('SELECT count(*) FROM financial_reports')).rows[0].count)).toBe(1);
+  await pool.query("UPDATE financial_reports SET fetched_at='2024-01-01'");
+  await pool.query('UPDATE user_modules SET enabled=false');await pruneMarketCache(pool,now);
+  expect(Number((await pool.query('SELECT count(*) FROM quotes')).rows[0].count)).toBe(0);
+  expect(Number((await pool.query('SELECT count(*) FROM financial_reports')).rows[0].count)).toBe(1);
+  expect(Number((await pool.query('SELECT count(*) FROM watchlist')).rows[0].count)).toBe(1);
+ });
+ it('retains older archive periods when later source responses contain only recent statements',async()=>{
+  await search();await add();
+  const archive: FinancialReport[]=Array.from({length:10},(_,i)=>({...report,basis:'annual',periodEnd:`${2016+i}-12-31`}));
+  archive.push(...Array.from({length:24},(_,i)=>({...report,periodEnd:`${2020+Math.floor(i/4)}-${['03-31','06-30','09-30','12-31'][i%4]}`})));
+  await createContentJobs(pool,{fetchInternationalFinancials:async()=>({items:archive,warnings:[]})}).syncContent(now);
+  await createContentJobs(pool,providers).syncContent(new Date(now.getTime()+86400000));
+  await pruneMarketCache(pool,new Date(now.getTime()+86400000));
+  const stored=(await app.inject({url:'/api/v1/finance/securities/NASDAQ%3AAAPL',headers})).json().financialReports;
+  expect(stored).toHaveLength(35);
+  expect(stored.some((r:FinancialReport)=>r.periodEnd==='2016-12-31')).toBe(true);
  });
 });

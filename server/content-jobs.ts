@@ -42,8 +42,7 @@ export function createContentJobs(pool: Pool, providers: ContentProviders) {
          await client.query(`INSERT INTO financial_reports(security_id,period_end,basis,data,fetched_at,observed_at) VALUES($1,$2,$3,$4::jsonb,$5,$5)
           ON CONFLICT(security_id,period_end,basis) DO UPDATE SET data=$4::jsonb,fetched_at=$5,observed_at=CASE WHEN financial_reports.data-'fetchedAt' IS DISTINCT FROM $4::jsonb-'fetchedAt' THEN $5 ELSE financial_reports.observed_at END`, [security.id,report.periodEnd,report.basis,JSON.stringify(report),now]);
         }
-        await client.query(`DELETE FROM financial_reports WHERE security_id=$1 AND (period_end,basis) NOT IN
-         (SELECT period_end,basis FROM (SELECT period_end,basis,row_number() OVER(PARTITION BY basis ORDER BY period_end DESC) AS position FROM financial_reports WHERE security_id=$1) r WHERE position <= CASE WHEN basis='quarter' THEN 5 ELSE 3 END)`, [security.id]);
+        // An upstream rolling window must never erase the financial history already archived.
        } else {
         for (const item of result.items as NewsItem[]) {
          if (!item.securityIds.includes(security.id)) continue;
@@ -80,12 +79,12 @@ export function createContentJobs(pool: Pool, providers: ContentProviders) {
  return { syncContent };
 }
 
-/** Bounded public market cache. Private watchlists/settings/digests are never deleted. */
+/** Trim transient public caches, preserving financial archives and tracked price history. */
 export async function pruneMarketCache(pool: Pool, now = new Date()): Promise<void> {
  const active = (await pool.query(`SELECT DISTINCT w.security_id FROM watchlist w JOIN users u ON u.id=w.user_id AND NOT u.disabled
   JOIN user_modules m ON m.user_id=w.user_id AND m.module_id='finance' AND m.enabled`)).rows.map(row => row.security_id);
- const old = new Date(now.getTime()-30*86400000), historyFrom = new Date(now.getTime()-400*86400000).toISOString().slice(0,10);
- await pool.query('DELETE FROM quotes WHERE date < $1 OR (NOT(security_id=ANY($2::text[])) AND fetched_at < $3)', [historyFrom,active,old]);
- await pool.query('DELETE FROM financial_reports WHERE NOT(security_id=ANY($1::text[])) AND fetched_at < $2', [active,old]);
+ const old = new Date(now.getTime()-30*86400000);
+ await pool.query('DELETE FROM quotes WHERE NOT(security_id=ANY($1::text[])) AND fetched_at < $2', [active,old]);
+ // Financial rows are compact long-term records; untracking stops fetching, not retention.
  await pool.query(`DELETE FROM news WHERE published_at < $1 OR id NOT IN (SELECT id FROM news ORDER BY published_at DESC,id LIMIT 5000)`, [new Date(now.getTime()-90*86400000)]);
 }
