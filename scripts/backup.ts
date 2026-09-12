@@ -1,0 +1,25 @@
+import { spawn } from 'node:child_process';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { createCipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { resolve } from 'node:path';
+const container = process.env.PG_CONTAINER || 'zhiyu-db';
+if (!/^[a-zA-Z0-9_-]+$/.test(container)) throw new Error('Invalid PG_CONTAINER');
+const passphrase = process.env.BACKUP_PASSPHRASE;
+if (!passphrase || passphrase.length < 16) throw new Error('請在 .env 設定至少 16 字元的 BACKUP_PASSPHRASE，並另外妥善保存。');
+const chunks: Buffer[] = [];
+await new Promise<void>((resolvePromise, reject) => {
+  const child = spawn('docker', ['exec', container, 'pg_dump', '-U', 'zhiyu', '-d', 'zhiyu', '-Fc', '--no-owner'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.on('data', chunk => chunks.push(chunk));
+  child.stderr.on('data', () => {});
+  child.on('error', reject); child.on('close', code => code === 0 ? resolvePromise() : reject(new Error('資料庫備份失敗，請確認 PostgreSQL 容器正在運作。')));
+});
+const dump = Buffer.concat(chunks);
+if (dump.subarray(0, 5).toString() !== 'PGDMP') throw new Error('備份格式檢查失敗');
+const salt = randomBytes(16), iv = randomBytes(12);
+const cipher = createCipheriv('aes-256-gcm', scryptSync(passphrase, salt, 32), iv);
+const encrypted = Buffer.concat([cipher.update(dump), cipher.final()]);
+const envelope = { format: 'zhiyu-backup-v1', createdAt: new Date().toISOString(), salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: encrypted.toString('base64') };
+await mkdir('backups', { recursive: true });
+const path = resolve('backups', `zhiyu-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+await writeFile(path, JSON.stringify(envelope), { flag: 'wx', mode: 0o600 });
+console.log(`已建立加密備份：${path}`);

@@ -1,0 +1,57 @@
+{
+  "name": "zhiyu-only-for-you",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch --use-system-ca --env-file-if-exists=.env server/main.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "worker": "tsx --use-system-ca --env-file-if-exists=.env server/worker.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env server/migrate.ts",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "tsx --use-system-ca --env-file-if-exists=.env server/main.ts",
+    "sync": "tsx --use-system-ca --env-file-if-exists=.env server/worker.ts --once",
+    "cf:check": "tsx --use-system-ca --env-file-if-exists=.env scripts/deploy.ts --dry-run",
+    "cf:deploy": "tsx --use-system-ca --env-file-if-exists=.env scripts/deploy.ts",
+    "db:backup": "tsx --env-file-if-exists=.env scripts/backup.ts",
+    "db:restore": "tsx --env-file-if-exists=.env scripts/restore.ts",
+    "setup": "tsx scripts/setup.ts",
+    "cf:prepare": "tsx --env-file-if-exists=.env scripts/prepare-cloudflare.ts",
+    "sources:verify": "tsx --use-system-ca scripts/verify-sources.ts"
+  },
+  "dependencies": {
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fastify/static": "^10.1.3",
+    "dotenv": "^17.4.2",
+    "fast-xml-parser": "^5.11.1",
+    "fastify": "^5.12.4",
+    "jose": "^6.2.12",
+    "lucide-react": "^1.45.0",
+    "pg": "^8.23.0",
+    "pg-boss": "^12.31.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.2",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0",
+    "wrangler": "^4.131.1"
+  }
+}
