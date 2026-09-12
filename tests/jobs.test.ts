@@ -131,7 +131,15 @@ describe.skipIf(!testUrl)('PostgreSQL persistence, deduplication and restart rec
     await jobs.syncFundamentals(instant);
     expect(providers.fetchFundamentals).toHaveBeenLastCalledWith([expect.objectContaining({ id: company.id })]);
     await jobs.syncMarket(instant);
-    expect(Number((await pool.query('SELECT count(*) AS count FROM quotes')).rows[0].count)).toBe(3);
+    expect(Number((await pool.query('SELECT count(*) AS count FROM quotes')).rows[0].count)).toBe(1);
+  });
+  it('loads only a stock catalog without fetching prices or news before selection', async () => {
+    vi.mocked(providers.fetchMarketSnapshot).mockClear();
+    const catalog = vi.fn(async (market: 'TWSE'|'TPEx') => market === 'TWSE' ? [security,company] : [{...company,id:'TPEx:6488',symbol:'6488',market:'TPEx' as const}]);
+    const jobs = createJobHandlers(pool,{...providers,fetchSecurityCatalog:catalog});
+    await jobs.syncMarket(instant);await jobs.syncNews(instant);
+    expect(catalog).toHaveBeenCalledTimes(2);expect(providers.fetchMarketSnapshot).not.toHaveBeenCalled();expect(providers.fetchNews).not.toHaveBeenCalled();
+    expect(Number((await pool.query('SELECT count(*) FROM quotes')).rows[0].count)).toBe(0);
   });
   it('restarts without repeating completed historical months, preserving leading zero IDs', async () => {
     await pool.query('INSERT INTO watchlist(user_id,security_id) VALUES($1,$2)', [userA, security.id]);
@@ -158,19 +166,23 @@ describe.skipIf(!testUrl)('PostgreSQL persistence, deduplication and restart rec
     expect(result.rows[1].data.items).toEqual([]);
   });
   it('rolls back an invalid snapshot and keeps the preceding market data', async () => {
+    await pool.query('INSERT INTO watchlist(user_id,security_id) VALUES($1,$2)', [userA, company.id]);
+    await createJobHandlers(pool, providers).syncMarket(instant);
     const broken: JobProviders = { ...providers, fetchMarketSnapshot: async () => ({ securities: [{ ...company, name: 'should rollback' }], quotes: [{ ...quote, securityId: 'missing-security' }], dataDate: '2026-09-11', warnings: [] }) };
     const result = await createJobHandlers(pool, broken).syncMarket(instant);
     expect(result.every(item => item.status === 'error')).toBe(true);
     expect((await pool.query('SELECT name FROM securities WHERE id=$1', [company.id])).rows[0].name).toBe(company.name);
-    expect(Number((await pool.query('SELECT count(*) AS count FROM quotes')).rows[0].count)).toBe(3);
+    expect(Number((await pool.query('SELECT count(*) AS count FROM quotes')).rows[0].count)).toBe(1);
   });
   it('never overwrites precise daily snapshot data with a later historical fetch', async () => {
     await pool.query('INSERT INTO watchlist(user_id,security_id) VALUES($1,$2)', [userA, security.id]);
+    await createJobHandlers(pool, providers).syncMarket(instant);
     const historical: JobProviders = { ...providers, fetchHistory: async () => ({ items: [{ ...quote, fetchedAt: '2026-09-12T13:00:00Z', changePercent: null, volume: null }], warnings: [] }) };
     await createJobHandlers(pool, historical).backfillHistory(security.id, '2026-09', instant);
     expect((await pool.query('SELECT data FROM quotes WHERE security_id=$1', [security.id])).rows[0].data).toMatchObject({ volume: 1000, changePercent: 1, dataset: 'snapshot' });
   });
   it('retains an exact article association when a subsequent sync has a different watchlist union', async () => {
+    await pool.query('INSERT INTO watchlist(user_id,security_id) VALUES($1,$2)', [userA, company.id]);
     await createJobHandlers(pool, providers).syncNews(instant);
     await createJobHandlers(pool, { ...providers, fetchNews: async () => ({ items: [{ ...news, securityIds: [], matchType: 'market' }], warnings: [] }) }).syncNews(instant);
     expect((await pool.query('SELECT data FROM news WHERE id=$1', [news.id])).rows[0].data).toMatchObject({ securityIds: [company.id], matchType: 'exact' });

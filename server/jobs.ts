@@ -1,16 +1,18 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { SendOptions } from 'pg-boss';
-import type { Digest, Fundamentals, Market, TaiwanMarket, MarketSnapshot, NewsItem, ProviderResult, Quote, Security } from '../shared/types.js';
+import type { Digest, Fundamentals, FinancialReport, Market, TaiwanMarket, MarketSnapshot, NewsItem, ProviderResult, Quote, Security } from '../shared/types.js';
 import { internationalSessionDate, regionOf } from '../shared/markets.js';
 import * as upstream from './providers/index.js';
+import { createContentJobs, type ContentProviders } from './content-jobs';
 
 export const QUEUES = ['market.sync', 'international.sync', 'news.sync', 'history.backfill', 'digest.generate', 'fundamentals.sync'] as const;
 export const GLOBAL_JOB_KEY = 'global';
 export type QueueName = typeof QUEUES[number];
 export interface CalendarDay { date: string; name: string; closed: boolean; }
-export interface JobProviders {
+export interface JobProviders extends ContentProviders {
   fetchMarketSnapshot(market: TaiwanMarket): Promise<MarketSnapshot>;
+  fetchSecurityCatalog?(market: TaiwanMarket): Promise<Security[]>;
   fetchInternationalHistory?(security: Security, now?: Date): Promise<ProviderResult<Quote>>;
   fetchFundamentals(securities: Security[]): Promise<ProviderResult<Fundamentals>>;
   fetchNews(securities: Security[]): Promise<ProviderResult<NewsItem>>;
@@ -127,7 +129,7 @@ async function upsertQuote(db: Queryable, quote: Quote, dataset: 'snapshot' | 'h
 export interface DigestInput {
   date: string; now: Date; expectedDate: string;
   securities: Security[]; quotes: Quote[]; news: NewsItem[];
-  financialUpdates: Fundamentals[]; sourceWarnings: string[];
+  financialUpdates: Fundamentals[]; sourceWarnings: string[]; reports?: FinancialReport[];
 }
 export function buildDigest(input: DigestInput): Digest {
   const latest = new Map<string, Quote>();
@@ -157,11 +159,11 @@ export function buildDigest(input: DigestInput): Digest {
   }
   const seenNews = new Set<string>();
   for (const item of [...input.news].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))) {
-    if (seenNews.has(item.id) || item.matchType !== 'exact' || taipeiParts(new Date(item.publishedAt)).date !== input.date) continue;
+    if (seenNews.has(item.id) || item.matchType === 'market' || (item.datePrecision === 'day' ? item.publishedDate : taipeiParts(new Date(item.publishedAt)).date) !== input.date) continue;
     const securityId = item.securityIds.find(id => ids.has(id));
     if (!securityId) continue;
     seenNews.add(item.id);
-    items.push({ securityId, title: `${item.kind === 'announcement' ? '公告' : '新聞'}｜${item.title}`, body: `${item.source} · ${item.publishedAt}`, url: item.url });
+    items.push({ securityId, title: `${item.kind === 'announcement' ? '公告' : item.matchType === 'provider' ? '來源關聯新聞' : '新聞'}｜${item.title}`, body: `${item.source} · ${item.datePrecision === 'day' ? item.publishedDate : item.publishedAt}${item.matchType === 'provider' ? '（由來源關聯至此標的，非公司公告）' : ''}`, url: item.url });
   }
   for (const update of input.financialUpdates) {
     if (!ids.has(update.securityId) || update.availability !== 'available') continue;
@@ -170,8 +172,9 @@ export function buildDigest(input: DigestInput): Digest {
       update.earningsPeriod ? `${update.earningsPeriod}（${update.basis === 'cumulative' ? '累計' : update.basis === 'annual' ? '年度' : '單季'}）EPS ${update.eps ?? '待補'}` : '',
     ].filter(Boolean).join('；'), url: update.sourceUrl });
   }
+  for (const report of input.reports ?? []) if (ids.has(report.securityId)) items.push({ securityId: report.securityId, title: `${report.basis === 'quarter' ? '季度' : '年度'}財報更新`, body: `期末 ${report.periodEnd}，營收 ${report.revenue === null ? '待補' : report.revenue.toLocaleString('zh-TW')} ${report.currency}，EPS ${report.eps ?? '待補'} ${report.currency}／股。`, url: report.sourceUrl });
   const warnings = [...new Set(input.sourceWarnings)];
-  if (input.securities.some(security => regionOf(security.market) !== 'TW')) items.push({ title: '國際行情說明', body: '依各市場最新已完成交易日整理；美日基本面、專屬新聞與完整休市日曆尚未接通。' });
+  if (input.securities.some(security => regionOf(security.market) !== 'TW')) items.push({ title: '國際資料說明', body: '依各市場已完成交易日整理；財報採來源報告幣別與季度／年度期間。新聞保留原文，可按需翻譯；完整休市日曆與官方公告尚未接通。' });
   if (warnings.length) items.push({ title: '資料更新狀態', body: warnings.join('；') });
   const tracked = input.securities.length;
   const partial = missing > 0 || warnings.length > 0;
@@ -213,10 +216,13 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
       const result = await withLock(pool, source, async client => {
         await beginSource(client, source, `${market} 每日行情`);
         try {
-          const snapshot = await providers.fetchMarketSnapshot(market);
+          const tracked = (await trackedSecurities(client)).filter(security => security.market === market);
+          const catalogOnly = !tracked.length && !!providers.fetchSecurityCatalog;
+          const snapshot = catalogOnly ? { securities: await providers.fetchSecurityCatalog!(market), quotes: [] as Quote[], dataDate: '', warnings: [] as string[] } : await providers.fetchMarketSnapshot(market);
           const warnings = [...snapshot.warnings];
-          if (!snapshot.securities.length || !snapshot.quotes.length) throw new Error('官方來源未提供可用的股票與行情資料');
-          if (snapshot.dataDate < expected) warnings.push(`最新官方資料 ${snapshot.dataDate}，尚待 ${expected} 更新或休市確認`);
+          if (!snapshot.securities.length || !catalogOnly && !snapshot.quotes.length) throw new Error('官方來源未提供可用的股票與行情資料');
+          if (snapshot.quotes.some(quote => !snapshot.securities.some(security => security.id === quote.securityId))) throw new Error('行情與股票目錄不一致');
+          if (!catalogOnly && snapshot.dataDate < expected) warnings.push(`最新官方資料 ${snapshot.dataDate}，尚待 ${expected} 更新或休市確認`);
           await transaction(client, async () => {
             for (const security of snapshot.securities) {
               await client.query(`INSERT INTO securities(id,symbol,name,market,asset_type,currency,sector,aliases,source_url,active)
@@ -227,10 +233,11 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
             // The provider returns the complete official ISIN catalog, not just today's traded symbols.
             await client.query('UPDATE securities SET active=false,updated_at=now() WHERE market=$1 AND active AND NOT(id=ANY($2::text[]))',
               [market, snapshot.securities.map(security => security.id)]);
-            for (const quote of snapshot.quotes) await upsertQuote(client, quote, 'snapshot');
+            const wanted = new Set((await trackedSecurities(client)).map(security => security.id));
+            for (const quote of snapshot.quotes) if (wanted.has(quote.securityId)) await upsertQuote(client, quote, 'snapshot');
           });
-          const outcome: JobOutcome = { source, status: warnings.length ? 'partial' : 'success', count: snapshot.quotes.length, warnings };
-          await endSource(client, outcome, snapshot.dataDate);
+          const outcome: JobOutcome = { source, status: warnings.length ? 'partial' : 'success', count: snapshot.quotes.filter(quote => tracked.some(security => security.id === quote.securityId)).length, warnings };
+          await endSource(client, outcome, snapshot.dataDate || undefined);
           return outcome;
         } catch (error) {
           const outcome: JobOutcome = { source, status: 'error', count: 0, warnings: [safeError(error)] };
@@ -287,7 +294,9 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
     return await withLock(pool, source, async client => {
       await beginSource(client, source, '中央社新聞與公司公告');
       try {
-        const result = await providers.fetchNews((await trackedSecurities(client)).filter(security => regionOf(security.market) === 'TW'));
+        const tracked = (await trackedSecurities(client)).filter(security => regionOf(security.market) === 'TW');
+        const fetched = tracked.length ? await providers.fetchNews(tracked) : { items: [], warnings: [], dataDate: undefined };
+        const result = { ...fetched, items: fetched.items.filter(item => item.securityIds.some(id => tracked.some(security => security.id === id))) };
         await transaction(client, async () => {
           for (const item of result.items) {
             await client.query(`INSERT INTO news(id,data,published_at) VALUES($1,$2::jsonb,$3)
@@ -357,7 +366,7 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
         WHERE NOT u.disabled AND m.module_id='finance' AND m.enabled`);
       const sourceResult = await client.query('SELECT id,name,status,error FROM source_runs');
       const start = `${date}T00:00:00+08:00`, end = `${addDays(date, 1)}T00:00:00+08:00`;
-      const news = (await client.query('SELECT data FROM news WHERE published_at >= $1 AND published_at < $2 ORDER BY published_at DESC', [start, end])).rows.map(row => row.data as NewsItem);
+      const news = (await client.query("SELECT data FROM news WHERE (data->>'datePrecision'='day' AND data->>'publishedDate'=$3) OR (COALESCE(data->>'datePrecision','minute') <> 'day' AND published_at >= $1 AND published_at < $2) ORDER BY published_at DESC", [start, end, date])).rows.map(row => row.data as NewsItem);
       let count = 0;
       for (const user of users.rows) {
         await transaction(client, async () => {
@@ -373,11 +382,13 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
             WHERE security_id=ANY($1::text[]) AND observed_at >= $2 AND observed_at < $3
             ORDER BY security_id,observed_at DESC`, [ids, start, end])).rows.map(row => row.data as Fundamentals);
           const relevantSourceIds = new Set([...(securities.some(security => regionOf(security.market) === 'TW') ? ['news', 'fundamentals'] : []), ...securities.map(security => regionOf(security.market) === 'TW' ? `market.${security.market}` : `yahoo.${regionOf(security.market)}`)]);
+          for (const security of securities.filter(security => regionOf(security.market)!=='TW')) { relevantSourceIds.add(`content.${regionOf(security.market)}.news`); if (security.assetType==='stock') relevantSourceIds.add(`content.${regionOf(security.market)}.financials`); }
+          const reports = providers.fetchInternationalFinancials ? (await client.query(`SELECT DISTINCT ON(security_id,basis) data FROM financial_reports WHERE security_id=ANY($1::text[]) AND observed_at >= $2 AND observed_at < $3 ORDER BY security_id,basis,period_end DESC`, [ids,start,end])).rows.map(row=>row.data as FinancialReport) : [];
           const sourceWarnings = sourceResult.rows.filter(row => relevantSourceIds.has(row.id) && row.status !== 'success').map(row => `${row.name}：${row.error || '資料尚未更新'}`);
           if (ids.length) {
             for (const source of relevantSourceIds) if (!sourceResult.rows.some(row => row.id === source)) sourceWarnings.push(`${source} 尚未完成首次同步`);
           }
-          const digest = buildDigest({ date, now, expectedDate, securities, quotes, news, financialUpdates, sourceWarnings: ids.length ? sourceWarnings : [] });
+          const digest = buildDigest({ date, now, expectedDate, securities, quotes, news, financialUpdates, reports, sourceWarnings: ids.length ? sourceWarnings : [] });
           await client.query(`INSERT INTO digests(user_id,date,data) VALUES($1,$2,$3::jsonb)
             ON CONFLICT(user_id,date) DO UPDATE SET data=$3::jsonb,updated_at=now()`, [user.id, date, JSON.stringify(digest)]);
           count++;
@@ -446,7 +457,7 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
       return outcomes;
     }) ?? [{ source: 'yahoo', status: 'skipped', count: 0, warnings: [] }];
   }
-  return { syncMarket, syncInternational, syncFundamentals, syncNews, backfillHistory, generateDigests };
+  return { syncMarket, syncInternational, syncFundamentals, syncNews, backfillHistory, generateDigests, ...createContentJobs(pool, providers) };
 }
 
 export interface HistoryQueue { send(name: string, data: object, options: SendOptions): Promise<unknown>; }

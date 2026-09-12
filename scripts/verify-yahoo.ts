@@ -9,6 +9,7 @@ import { loadConfig } from '../server/config';
 import { buildApp } from '../server/app';
 import { createJobHandlers, latestDigestDate, safeError, type JobProviders } from '../server/jobs';
 import { fetchInternationalHistory } from '../server/providers/yahoo';
+import { fetchInternationalFinancials, fetchInternationalNews } from '../server/providers/international-content';
 import type { Security, WatchlistEntry, Quote } from '../shared/types';
 
 const samples = [{ region: 'US', query: 'AAPL', id: 'NASDAQ:AAPL', currency: 'USD', type: 'stock' },
@@ -23,8 +24,10 @@ const pool = createPool(url.href);
 const base = 'http://127.0.0.1:3003';
 const config = loadConfig({ APP_MODE: 'development', DATABASE_URL: url.href, PUBLIC_ORIGIN: base, PORT: '3003' });
 let app: Awaited<ReturnType<typeof buildApp>> | undefined, browser: Browser | undefined, page: Page | undefined, created = false;
-const calls: string[] = [], queued: string[] = [], errors: string[] = [];
+const calls: string[] = [], queued: string[] = [], errors: string[] = [], contentCalls: string[] = [];
 const providers: JobProviders = {
+  fetchInternationalFinancials: async (security, now) => { contentCalls.push(`financials:${security.id}`); return fetchInternationalFinancials(security, now); },
+  fetchInternationalNews: async (security, now) => { contentCalls.push(`news:${security.id}`); return fetchInternationalNews(security, now); },
   fetchInternationalHistory: async (security, now) => { calls.push(security.id); return fetchInternationalHistory(security, now); },
   fetchMarketSnapshot: async () => { throw new Error('Unexpected Taiwan request'); },
   fetchHistory: async () => { throw new Error('Unexpected Taiwan request'); },
@@ -44,6 +47,8 @@ try {
     const security = response.json<Security[]>().find(item => item.id === sample.id);
     assert.equal(security?.currency, sample.currency); assert.equal(security?.assetType, sample.type);
   }
+  assert.equal(Number((await pool.query('SELECT count(*) FROM securities')).rows[0].count), 0, 'Search must not persist unselected companies');
+  await createJobHandlers(pool,providers).syncContent(); assert.equal(contentCalls.length,0);
   if (process.argv.includes('--ui')) {
     await app.listen({ host: '127.0.0.1', port: 3003 });
     browser = await chromium.launch({ headless: true, ...(process.env.QA_CHROME_PATH ? { executablePath: process.env.QA_CHROME_PATH } : { channel: 'chrome' }) });
@@ -69,6 +74,9 @@ try {
   assert.equal((await app.inject({ method: 'PUT', url: '/api/v1/finance/watchlist/NASDAQ%3AAAPL', headers: { ...headers, 'x-person': 'b' }, payload: { held: true, interested: true, group: 'B' } })).statusCode, 200);
   const now = new Date(), jobs = createJobHandlers(pool, providers);
   report.sources = await jobs.syncInternational(now);
+  report.contentSources = await jobs.syncContent(now);
+  assert.equal(contentCalls.filter(call=>call.startsWith('financials:')).length,2);
+  assert.equal(contentCalls.filter(call=>call.startsWith('news:')).length,4);
   assert.deepEqual(new Set(calls), new Set(samples.map(sample => sample.id))); assert.equal(calls.length, 4);
   const entries = (await app.inject({ url: '/api/v1/finance/watchlist' })).json<WatchlistEntry[]>();
   report.samples = [];
@@ -78,12 +86,14 @@ try {
     const history: { quotes: Quote[]; coverage: { from: string; to: string } } = (await app.inject({ url: `/api/v1/finance/securities/${encodeURIComponent(sample.id)}/history?range=1y` })).json();
     assert.ok(history.quotes.length > 150, `${sample.id} history unexpectedly short`);
     assert.equal(new Set(history.quotes.map((q: { date: string }) => q.date)).size, history.quotes.length);
-    const detail: { fundamentals: { availability: string } } = (await app.inject({ url: `/api/v1/finance/securities/${encodeURIComponent(sample.id)}` })).json();
+    const detail: { fundamentals: { availability: string }; financialReports: {currency:string; totalAssets:number|null; operatingCashFlow:number|null; revenue:number|null}[]; news:unknown[] } = (await app.inject({ url: `/api/v1/finance/securities/${encodeURIComponent(sample.id)}` })).json();
     assert.equal(detail.fundamentals.availability, sample.type === 'etf' ? 'not_applicable' : 'unsupported');
+    if(sample.type==='stock'){assert.ok(detail.financialReports.length>=2,`${sample.id}: financial reports missing`);assert.equal(detail.financialReports[0].currency,sample.currency);assert.ok(detail.financialReports.some(row=>row.totalAssets!==null&&row.operatingCashFlow!==null));assert.ok(detail.news.length>0,`${sample.id}: news missing`);} else assert.equal(detail.financialReports.length,0);
     (report.samples as unknown[]).push({ id: sample.id, currency: sample.currency, bars: history.quotes.length, from: history.coverage.from, to: history.coverage.to });
   }
   await createJobHandlers(pool, providers).syncInternational(new Date(now.getTime() + 1000));
   assert.equal(calls.length, 4, 'Restart duplicated a source request');
+  await createJobHandlers(pool,providers).syncContent(now); assert.equal(contentCalls.length,6,'Restart duplicated content requests');
   const digestDate = latestDigestDate(now);
   await jobs.generateDigests(now, digestDate); await jobs.generateDigests(now, digestDate);
   const digests = (await pool.query('SELECT data FROM digests')).rows;
@@ -99,8 +109,14 @@ try {
     await page.locator('.security-cell').filter({ hasText: '7203' }).click();
     await expect(page.locator('.chart-card')).toContainText('JPY');
     await expect(page.locator('.chart-card')).toContainText('拆股調整');
-    await expect(page.locator('.fundamentals-card')).toContainText('尚未');
-    await expect(page.locator('.news-card')).toContainText('尚未');
+    await expect(page.locator('.fundamentals-card')).toContainText('損益表');
+    await expect(page.locator('.fundamentals-card')).toContainText('JPY 百萬');
+    await expect(page.locator('.news-card .news-entry').first()).toBeVisible();
+    await expect(page.locator('.news-card')).toContainText('翻譯標題');
+    await page.getByRole('combobox',{name:'翻譯目標語言'}).selectOption('en');
+    await expect(page.locator('.news-card .translation-links a').first()).toHaveAttribute('href',/tl=en/);
+    await page.locator('.report-tabs').getByRole('button',{name:'年度',exact:true}).click();
+    await expect(page.locator('.fundamentals-card')).toContainText('12 個月');
     await page.locator('.security-cell').filter({ hasText: '1306' }).click();
     await expect(page.getByRole('heading', { name: '用適合 ETF 的方式觀察' })).toBeVisible();
     await page.getByRole('button', { name: '1年', exact: true }).click();
@@ -118,13 +134,15 @@ try {
     mobile.on('pageerror', error => errors.push(error.message)); await mobile.goto(base);
     await expect(mobile.locator('.watchlist-table tbody tr')).toHaveCount(4);
     assert.ok(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await expect(mobile.getByRole('combobox',{name:'翻譯目標語言'})).toHaveValue('en');
+    await expect(mobile.locator('.fundamentals-card')).toContainText('USD 百萬');
     await mobile.screenshot({ path: '.cache/qa-yahoo-mobile.png', fullPage: true });
     const other = await browser.newPage({ extraHTTPHeaders: { 'x-person': 'b' } }); await other.goto(base);
     await expect(other.locator('.watchlist-table tbody tr')).toHaveCount(1);
     await expect(other.locator('.watchlist-table')).toContainText('AAPL');
     assert.deepEqual(errors, []); report.ui = { desktop: 1440, mobile: 390, crossDevice: true, separateAccounts: true, runtimeErrors: 0 };
   }
-  report.providerCalls = calls.length; report.uniqueDigests = digests.length; report.ok = true;
+  report.contentCalls = contentCalls.length; report.financialReports = Number((await pool.query('SELECT count(*) FROM financial_reports')).rows[0].count); report.news = Number((await pool.query('SELECT count(*) FROM news')).rows[0].count); report.providerCalls = calls.length; report.uniqueDigests = digests.length; report.ok = true;
 } catch (error) { report.error = safeError(error); process.exitCode = 1; }
 finally {
   await browser?.close(); await app?.close(); await pool.end();

@@ -2,6 +2,7 @@ import { PgBoss } from 'pg-boss';
 import { loadConfig } from './config.js';
 import { createPool, migrate } from './db.js';
 import { catchupNeeded, createJobHandlers, enqueueHistory, GLOBAL_JOB_KEY, QUEUES, safeError, trackedSecurities, type JobOutcome, type QueueName } from './jobs.js';
+import { pruneMarketCache } from './content-jobs';
 
 const config = loadConfig();
 const pool = createPool(config.databaseUrl);
@@ -26,11 +27,12 @@ async function enqueueTrackedHistory() {
 }
 async function digestPipeline() {
   // Save an honest partial digest even if one upstream is unavailable. A later retry updates the same row.
-  const outcomes = [...await jobs.syncMarket(), ...await jobs.syncInternational(), await jobs.syncFundamentals(), await jobs.syncNews()];
+  const outcomes = [...await jobs.syncMarket(), ...await jobs.syncInternational(), ...await jobs.syncContent(), await jobs.syncFundamentals(), await jobs.syncNews()];
   report(outcomes);
   const count = await jobs.generateDigests();
   console.info(JSON.stringify({ event: 'digest-generated', count }));
   await enqueueTrackedHistory();
+  await pruneMarketCache(pool);
   requireRetry(outcomes);
 }
 async function shutdown() {
@@ -44,7 +46,7 @@ async function shutdown() {
 async function main() {
   await migrate(pool);
   if (once) {
-    const outcomes = [...await jobs.syncMarket(), ...await jobs.syncInternational(), await jobs.syncFundamentals(), await jobs.syncNews()];
+    const outcomes = [...await jobs.syncMarket(), ...await jobs.syncInternational(), ...await jobs.syncContent(), await jobs.syncFundamentals(), await jobs.syncNews()];
     report(outcomes);
     const history = await jobs.backfillHistory();
     report(history);
@@ -66,10 +68,11 @@ async function main() {
     await enqueueTrackedHistory(); requireRetry(outcomes);
   });
   await boss.work('news.sync', { batchSize: 1 }, async () => {
+    report(await jobs.syncContent());
     const outcome = await jobs.syncNews(); report(outcome); requireRetry([outcome]);
   });
   await boss.work('international.sync', { batchSize: 1 }, async () => {
-    const outcomes = await jobs.syncInternational(); report(outcomes);
+    const outcomes = [...await jobs.syncInternational(), ...await jobs.syncContent()]; report(outcomes);
     if (outcomes.some(outcome => outcome.count > 0)) await jobs.generateDigests();
   });
   await boss.work('fundamentals.sync', { batchSize: 1 }, async () => {

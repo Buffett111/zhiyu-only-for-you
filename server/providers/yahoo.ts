@@ -17,7 +17,7 @@ export function assertYahooSymbol(symbol: string): void {
 const silent = () => {};
 
 /** One instance per process; never log Yahoo cookies, crumb, raw errors or query strings. */
-export function createYahooClient(transport: typeof fetch = fetch) {
+export function createYahooClient(transport: typeof fetch = fetch, inspectBody?: (url: URL, body: Uint8Array) => void) {
   let blockedUntil = 0;
   const guardedFetch: typeof fetch = async (input, init) => {
     if (Date.now() < blockedUntil) throw new YahooUnavailable('Yahoo 要求暫停請求，稍後再試。');
@@ -45,12 +45,39 @@ export function createYahooClient(transport: typeof fetch = fetch) {
       if (length > 8_000_000) { await reader.cancel(); throw new YahooUnavailable('Yahoo 回應過大。'); }
       chunks.push(chunk.value);
     }
-    return new Response(chunks.length ? Buffer.concat(chunks) : null, { status: response.status, statusText: response.statusText, headers: response.headers });
+    const body = chunks.length ? Buffer.concat(chunks) : null;
+    if (body && response.ok) inspectBody?.(url, body);
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
   };
   return new YahooFinance({ fetch: guardedFetch, versionCheck: false, queue: { concurrency: 1, interval: 3000 },
     logger: { info: silent, warn: silent, error: silent, debug: silent, dir: silent }, validation: { logErrors: false }, suppressNotices: ['yahooSurvey'] });
 }
-const client = createYahooClient();
+// The library drops reporting currency and zero values when transforming statements.
+// Keep the bounded source response only until the corresponding call is normalized.
+const financialResponses = new Map<string, unknown>();
+const client = createYahooClient(fetch, (url, body) => {
+  if (!url.pathname.startsWith('/ws/fundamentals-timeseries/')) return;
+  const symbol = decodeURIComponent(url.pathname.split('/').at(-1)!);
+  const type = url.searchParams.get('type')?.startsWith('annual') ? 'annual' : 'quarterly';
+  if (financialResponses.size > 100) financialResponses.clear();
+  financialResponses.set(`${symbol}:${type}`, JSON.parse(new TextDecoder().decode(body)));
+});
+export async function yahooFinancialSource(symbol: string, type: 'annual' | 'quarterly', now = new Date()): Promise<unknown> {
+  assertYahooSymbol(symbol);
+  const key = `${symbol}:${type}`; financialResponses.delete(key);
+  const from = new Date(now); from.setUTCFullYear(from.getUTCFullYear() - 3);
+  try {
+    await client.fundamentalsTimeSeries(symbol, { period1: from, period2: now, type, module: 'all' });
+    const raw = financialResponses.get(key); if (!raw) throw new YahooUnavailable('Yahoo 財報回應缺少原始幣別資料。');
+    return raw;
+  } catch (error) { throw error instanceof YahooUnavailable ? error : new YahooUnavailable('Yahoo 財報暫時無法取得，保留上次資料。'); }
+  finally { financialResponses.delete(key); }
+}
+export async function yahooNewsSource(symbol: string) {
+  assertYahooSymbol(symbol);
+  try { return (await client.search(symbol, { quotesCount: 0, newsCount: 20, enableFuzzyQuery: false })).news; }
+  catch (error) { throw error instanceof YahooUnavailable ? error : new YahooUnavailable('Yahoo 新聞暫時無法取得，保留上次資料。'); }
+}
 const lookupCache = new Map<string, { expires: number; promise: Promise<Security[]> }>();
 
 export function securityFromYahoo(row: { symbol?: string; exchange?: string; quoteType?: string; shortname?: string; longname?: string }, region: Exclude<Region, 'TW'>): Security | null {

@@ -1,5 +1,6 @@
 import type { Fundamentals, TaiwanMarket as Market, MarketSnapshot, NewsItem, ProviderResult, Quote, Security } from '../../shared/types.js';
 export { fetchInternationalHistory } from './yahoo.js';
+export { fetchInternationalFinancials, fetchInternationalNews } from './international-content.js';
 import { officialJson, officialText } from './http.js';
 import { enrichSecurities, field, financialApplicability, parseAnnouncements, parseCnaRss, parseDate, parseFundamental, parseHistory, parseIsin, parseQuote, rows, stripHtml, symbolOf, text, type Row } from './parsers.js';
 
@@ -28,6 +29,11 @@ const errorMessage = (reason: unknown): string => reason instanceof Error ? reas
 const unique = <T extends { id: string }>(items: T[]): T[] => [...new Map(items.map(item => [item.id, item])).values()];
 const maxDate = (dates: string[]): string | undefined => dates.filter(Boolean).sort().at(-1);
 
+export async function fetchSecurityCatalog(market: Market): Promise<Security[]> {
+  const source = SOURCES[market];
+  const [catalog, companies] = await Promise.all([officialText(source.isin, 'big5').then(html => parseIsin(html,market,source.isin)), officialJson(source.companies).then(rows)]);
+  return enrichSecurities(catalog, companies);
+}
 export async function fetchMarketSnapshot(market: Market): Promise<MarketSnapshot> {
   const source = SOURCES[market];
   if (!source) throw new Error('不支援的交易所');

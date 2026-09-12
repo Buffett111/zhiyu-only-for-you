@@ -45,3 +45,13 @@ Access JWT 驗证 issuer、audience、RS256 簽章、有效期與 email 邀請�
 `GET /api/v1/bootstrap` 返回用戶、模組、清單、摘要、来源狀態。核心路由 `/me`、`/modules/:id`、`/sources`。財經路由 `/finance/securities`、`/finance/securities/:id/history`、`/finance/watchlist/:id`、`/finance/news`、`/finance/digests`、`/finance/export.csv`。管理員 `/admin/sync` 僅入佇列。完整回應型別在 shared/types.ts。
 
 搜尋為 `/api/v1/finance/securities?region=TW|US|JP&q=...`；省略 region 預設 TW，維持舊客戶端相容。國際搜尋只在非空查詢時呼叫來源，10 分鐘快取。002 遷移擴充市場並強制市場與幣別一致；財經模組升為 1.1.0，configVersion 維持 1，既有清單及卡片設定不重置。
+
+## 財報、新聞與按需內容（1.2.0）
+
+003 遷移加入 `financial_reports` 與 `content_progress`。`server/content-jobs.ts` 對已啟用追蹤聯集依種類檢查冷卻時間，單一資料庫鎖避免 API 觸發、排程及重啟重複抓取。既有 international.sync、news.sync 及摘要流程會呼叫它，不增加公開服務或帳戶需求。
+
+報表主鍵為股票、期末日、quarter／annual；JSON 保留報告幣別、三表選定欄位及來源。`observed_at` 只在數值變更時更新，`fetched_at` 表示最近擷取，避免每日重抓相同財報被誤報成新財報。
+
+國際搜尋不寫資料庫；加入清單才將已驗證、尚未過期的候選保存。`SecurityDetail` 新增可選的 financialReports／contentStatus；舊回應欄位保持相容。財經設定新增可選 translationTarget（zh-TW／en／ja），configVersion 仍為 1，舊帳號預設繁中。
+
+翻譯入口由 `shared/translation.ts` 建立，前端只在點擊後開啟外部譯文。資料庫不保存翻譯全文。市場快取清理由 `pruneMarketCache` 執行，期限見資料來源文件；不刪除私人清單、設定或摘要。

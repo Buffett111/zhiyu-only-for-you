@@ -30,7 +30,7 @@ function missingFundamentals(security: Security): Fundamentals {
   return { securityId: security.id, asOf: '', revenuePeriod: null, earningsPeriod: null, basis: 'cumulative', revenue: null, revenueYoy: null, eps: null, grossMargin: null, operatingMargin: null, unit: '新台幣千元；EPS 為元', sourceUrl: security.sourceUrl, availability: security.assetType === 'etf' ? 'not_applicable' : /金融|保險|銀行|證券/.test(security.sector || '') ? 'unsupported' : 'missing' };
 }
 const watchSchema = z.object({ held: z.boolean(), interested: z.boolean(), group: z.string().trim().min(1).max(40).default('我的清單') }).strict();
-const moduleSchema = z.object({ enabled: z.boolean(), configVersion: z.literal(1), config: z.object({}).strict().default({}), widgets: z.array(z.enum(financeModule.widgets.map(w => w.id) as [string, ...string[]])).max(5).refine(v => new Set(v).size === v.length, '卡片不能重複') }).strict();
+const moduleSchema = z.object({ enabled: z.boolean(), configVersion: z.literal(1), config: z.object({ translationTarget: z.enum(['zh-TW','en','ja']).optional() }).strict().default({}), widgets: z.array(z.enum(financeModule.widgets.map(w => w.id) as [string, ...string[]])).max(5).refine(v => new Set(v).size === v.length, '卡片不能重複') }).strict();
 function taipeiToday() { return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
 export function historyWindow(today: string, range: '1m' | '3m' | '1y') {
   const monthsBack = { '1m': 1, '3m': 3, '1y': 12 }[range];
@@ -95,6 +95,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     if (!result.rowCount) throw new AccessError(404, '找不到這個標的。');
     return mapSecurity(result.rows[0]);
   };
+  const selections = new Map<string, { security: Security; expires: number }>();
   const enqueue = async (name: string, data: object = {}, singletonKey?: string) => {
     if (!queue) throw new AccessError(503, '背景工作尚未啟動。');
     return queue.send(name, data, { singletonKey: singletonKey || 'global', retryLimit: 2, retryDelay: 60, retryBackoff: true });
@@ -129,10 +130,8 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
       const securities = await yahooSearch(q, region);
       for (const security of securities) {
         if (regionOf(security.market) !== region) continue;
-        await pool.query(`INSERT INTO securities(id,symbol,name,market,asset_type,currency,aliases,source_url,active)
-          VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,true) ON CONFLICT(id) DO UPDATE SET
-          name=EXCLUDED.name,asset_type=EXCLUDED.asset_type,aliases=EXCLUDED.aliases,source_url=EXCLUDED.source_url,active=true,updated_at=now()`,
-          [security.id, security.symbol, security.name, security.market, security.assetType, security.currency, JSON.stringify(security.aliases), security.sourceUrl]);
+        if (selections.size >= 500) selections.delete(selections.keys().next().value!);
+        selections.set(security.id, { security, expires: Date.now()+600000 });
       }
       return securities.filter(security => regionOf(security.market) === region);
     }
@@ -143,6 +142,12 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
   app.get('/api/v1/finance/watchlist', { preHandler: requireFinance }, async request => watchlist(request.zhiyuUser.id));
   app.put<{ Params: { id: string } }>('/api/v1/finance/watchlist/:id', { preHandler: requireFinance }, async request => {
     const input = watchSchema.parse(request.body);
+    const selection = selections.get(request.params.id);
+    if (selection && selection.expires > Date.now()) {
+      const s = selection.security;
+      await pool.query(`INSERT INTO securities(id,symbol,name,market,asset_type,currency,aliases,source_url,active) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,true)
+       ON CONFLICT(id) DO UPDATE SET name=$3,aliases=$7::jsonb,source_url=$8,active=true`, [s.id,s.symbol,s.name,s.market,s.assetType,s.currency,JSON.stringify(s.aliases),s.sourceUrl]);
+    }
     await getSecurity(request.params.id);
     const client = await pool.connect();
     let inserted = false;
@@ -170,7 +175,10 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
   app.get<{ Params: { id: string } }>('/api/v1/finance/securities/:id', { preHandler: requireFinance }, async request => {
     const security = await getSecurity(request.params.id);
     const [q, f, n] = await Promise.all([pool.query('SELECT data FROM quotes WHERE security_id=$1 ORDER BY date DESC LIMIT 1', [security.id]), pool.query('SELECT data FROM fundamentals WHERE security_id=$1', [security.id]), pool.query("SELECT data FROM news WHERE data->'securityIds' ? $1 ORDER BY published_at DESC LIMIT 30", [security.id])]);
-    return { security, quote: q.rows[0]?.data || null, fundamentals: security.assetType === 'etf' ? missingFundamentals(security) : f.rows[0]?.data || missingFundamentals(security), news: n.rows.map(r => r.data) };
+    const reports = await pool.query('SELECT data FROM financial_reports WHERE security_id=$1 ORDER BY period_end DESC,basis', [security.id]);
+    const progress = await pool.query('SELECT * FROM content_progress WHERE security_id=$1 ORDER BY kind', [security.id]);
+    return { security, quote: q.rows[0]?.data || null, fundamentals: security.assetType === 'etf' ? missingFundamentals(security) : f.rows[0]?.data || missingFundamentals(security), news: n.rows.map(r => r.data),
+      financialReports: reports.rows.map(r => r.data), contentStatus: progress.rows.map(r => ({kind:r.kind,status:r.status,lastAttempt:iso(r.last_attempt),lastSuccess:iso(r.last_success),error:r.error})) };
   });
   app.get<{ Params: { id: string }; Querystring: { range?: string } }>('/api/v1/finance/securities/:id/history', { preHandler: requireFinance }, async request => {
     const security = await getSecurity(request.params.id);

@@ -68,14 +68,18 @@ try {
   assert.ok(catalog.rows.every(row => row.active));
   assert.equal(catalog.rows.find(row => row.id === 'TWSE:0050')?.asset_type, 'etf');
   assert.equal(catalog.rows.find(row => row.id === 'TPEx:00679B')?.asset_type, 'etf');
-  const snapshotCount = Number((await pool.query('SELECT count(*) AS count FROM quotes')).rows[0].count);
+  let snapshotCount = Number((await pool.query('SELECT count(*) AS count FROM quotes')).rows[0].count);
   assert.equal(snapshotCount, market.reduce((sum, outcome) => sum + outcome.count, 0));
+  assert.equal(snapshotCount, 0, 'No private selection exists yet; market prices must not be persisted.');
 
   await pool.query(`INSERT INTO watchlist(user_id,security_id,held,interested,group_name) VALUES
     ($1,'TWSE:2330',true,true,'驗證持有'),($1,'TWSE:0050',false,true,'驗證觀察'),($1,'TPEx:6488',true,false,'驗證持有'),
     ($2,'TWSE:2330',false,true,'驗證觀察'),($2,'TPEx:00679B',true,true,'驗證持有')`, [userA, userB]);
   const ownership = (await pool.query('SELECT count(*) AS entries,count(DISTINCT security_id) AS securities FROM watchlist')).rows[0];
   assert.equal(Number(ownership.entries), 5); assert.equal(Number(ownership.securities), 4);
+  requireSuccess(await jobs.syncMarket(now), 'selected market');
+  snapshotCount = Number((await pool.query('SELECT count(*) AS count FROM quotes')).rows[0].count);
+  assert.equal(snapshotCount, 4, 'Persist only the four selected securities, not the whole market.');
 
   const fundamentals = await jobs.syncFundamentals(now);
   requireSuccess([fundamentals], 'fundamentals');
