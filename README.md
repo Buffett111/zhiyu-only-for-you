@@ -41,6 +41,7 @@ npm run dev
 - [部署、登入與帳號設定](docs/deployment.md)
 - [架構與模組擴充契約](docs/architecture.md)
 - [來源、授權與資料邊界](docs/data-sources.md)
+- [美股、日股免費資料來源調研](docs/international-data-survey.md)
 - [驗證紀錄](docs/verification.md)
 
 本機版本已通過 60 項測試、正式建置與真實資料管線驗證；完整範圍見[驗證紀錄](docs/verification.md)。公開部署需自行設定 Cloudflare 帳號、Access 邀請名單及本機 Tunnel；程式庫不包含可共用的服務帳號或部署憑證。

@@ -2,6 +2,8 @@
 
 查證日期：2026-09-12/13。實際 adapter URL 固定於 server/providers/index.ts，向外連線白名單位於 http.ts。沒有使用財報狗內部 API 或擷取其付費內容。
 
+美股與日股候選、免費 API 額度、涵蓋範圍及待驗證項目，另見[國際資料來源調研](international-data-survey.md)；目前正式 adapter 仍為下列台股來源。
+
 | 類型 | 來源 | 行為 |
 | --- | --- | --- |
 | 商品分類 | TWSE ISIN mode2/4、上市上櫃公司基本資料 | 按官方類別區分一般股票與ETF，保留前導零；略過權證、ETN及其他類型 |
