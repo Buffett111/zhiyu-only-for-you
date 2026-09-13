@@ -6,7 +6,7 @@ import { importMedia,lockMedia } from './service';
 import { MediaError } from './import';
 
 const credentials=z.object({deviceId:z.uuid(),token:z.string().regex(/^[a-f0-9]{64}$/)});
-const event=z.object({videoId:z.string().regex(/^[A-Za-z0-9_-]{11}$/),title:z.string().trim().min(1).max(500),channel:z.string().max(160).nullable(),watchedAt:z.iso.datetime(),actualSeconds:z.number().int().min(0).max(86400).nullable(),precision:z.enum(['day','exact'])}).strict();
+const event=z.object({videoId:z.string().regex(/^[A-Za-z0-9_-]{11}$/),title:z.string().trim().min(1).max(500),channel:z.string().max(160).nullable(),watchedAt:z.iso.datetime(),actualSeconds:z.number().int().min(0).max(86400).nullable(),precision:z.enum(['day','exact']),durationSeconds:z.number().int().min(0).max(31536000).nullable().optional(),progressPercent:z.number().min(0).max(100).nullable().optional(),resumeSeconds:z.number().int().min(0).max(31536000).nullable().optional()}).strict();
 const hash=(token:string)=>createHash('sha256').update(token).digest('hex');
 export function registerMediaDevices(app:FastifyInstance,pool:Pool){
   app.get('/api/v1/media/devices',async request=>({devices:(await pool.query('SELECT id,label,created_at AS "createdAt",last_sync AS "lastSync",revoked_at AS "revokedAt" FROM media_devices WHERE user_id=$1 ORDER BY created_at DESC',[request.zhiyuUser.id])).rows}));

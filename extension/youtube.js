@@ -24,28 +24,35 @@
   async function done(reason){if(!scan)return;const finished=scan;scan=null;show(`${reason==='history-start'?'已讀到歷史起點':reason==='cutoff'?'近期新增紀錄已讀取':'擷取尚未完成：'+reason}\n最早已讀 ${finished.oldest||'未提供'} · ${finished.seen.size} 筆`);await send({type:'history-done',scanId:finished.id,reason,oldest:finished.oldest});}
   async function scanStep(){
     if(!settings.scan||!settings.enabled||location.pathname!=='/feed/history'){if(scan)show('擷取已暫停，恢復同步後繼續。');return;}
-    if(!scan||scan.id!==settings.scan.id)scan={id:settings.scan.id,seen:new Set(),oldest:null,empty:0,started:Date.now(),lastAdvance:Date.now()};
+    if(!scan||scan.id!==settings.scan.id)scan={id:settings.scan.id,seen:new Set(),oldest:null,empty:0,started:Date.now(),lastAdvance:Date.now(),recovery:{lastAdvance:Date.now()},probeUp:false};
     const problem=history.historyPageProblem();if(problem){await done(problem);return;}
     const collected=history.collectProgress();
     const items=collected.filter(item=>item.watchedDate&&!scan.seen.has(`${item.videoId}|${item.watchedDate}`));
     if(items.length){
       for(let offset=0;offset<items.length;offset+=200){const part=items.slice(offset,offset+200);const oldest=part.reduce((at,item)=>!at||item.watchedDate<at?item.watchedDate:at,scan.oldest);
-        const result=await send({type:'capture',kind:'history',scanId:scan.id,deviceId:settings.deviceId,oldest,events:part.map(item=>({videoId:item.videoId,title:item.title||'YouTube 影片',channel:item.channelTitle||null,watchedAt:history.dayTimestamp(item.watchedDate),actualSeconds:null,precision:'day'}))});
+        const result=await send({type:'capture',kind:'history',scanId:scan.id,deviceId:settings.deviceId,oldest,events:part.map(item=>({videoId:item.videoId,title:item.title||'YouTube 影片',channel:item.channelTitle||null,watchedAt:history.dayTimestamp(item.watchedDate),actualSeconds:null,precision:'day',durationSeconds:item.durationSeconds,progressPercent:item.progressPercent,resumeSeconds:item.resumeSeconds}))});
         if(!result?.ok){show(`${result?.error||'等待主機同步'}\n最早已讀 ${scan.oldest||'未提供'}；會自動重試`);return;}
         for(const item of part)scan.seen.add(`${item.videoId}|${item.watchedDate}`);scan.oldest=oldest;scan.lastAdvance=Date.now();scan.empty=0;
       }
     }else scan.empty++;
-    show(`已擷取 ${scan.seen.size} 筆 · 最早已讀 ${scan.oldest||'等待日期'}\n持續動態載入 HTML；本次${settings.scan.full?'完整歷史回補':'近期增量同步'}`);
+    const recovery=history.recoveryStep(scan.recovery,{now:Date.now(),advanced:items.length>0,pending:history.historyCompletionReason()!=='history-start',hasItems:scan.seen.size>0,terminal:history.explicitHistoryEnd()});
+    show(`已擷取 ${scan.seen.size} 筆 · 最早已讀 ${scan.oldest||'等待日期'}\n${recovery==='wait'||recovery==='probe'?`等待 YouTube 載入 · 已自動重試 ${scan.recovery.attempts||0} 次，將持續續抓`:`持續動態載入 HTML；本次${settings.scan.full?'完整歷史回補':'近期增量同步'}`}`);
     if(!settings.scan.full&&settings.scan.cutoff&&scan.oldest&&scan.oldest<settings.scan.cutoff){await done('cutoff');return;}
-    // Never report completion merely because a request is slow or a renderer changed.
-    if(scan.empty>=15){
-      if(!scan.seen.size){await done('無法辨識紀錄，請確認 YouTube 已登入、紀錄已開啟，或頁面結構是否改變');return;}
-      if(history.historyCompletionReason()==='history-start'){await done('history-start');return;}
-      if(Date.now()-scan.lastAdvance>120000){await done('YouTube 載入停滯，尚有更多紀錄');return;}
-    }
+    if(recovery==='complete'){await done('history-start');return;}
     // Keep rendered DOM bounded while preserving page height and continuation loading.
     history.compactHistorySections(document,40);
     const continuation=[...document.querySelectorAll('ytd-continuation-item-renderer')].at(-1);
+    if(recovery==='probe'){
+      await send({type:'history-progress',scanId:scan.id,status:`等待 YouTube 載入 · 自動重試 ${scan.recovery.attempts} 次 · 最早 ${scan.oldest||'等待日期'} · 已擷取 ${scan.seen.size} 筆`});
+      // Restrict clicks to continuation controls, never arbitrary history buttons.
+      const retry=continuation?.querySelector('button:not([disabled]), [role="button"][tabindex="0"]');
+      if(retry)retry.click();
+      // Leave then re-enter the observer viewport on the next pulse. Repeated
+      // scrollIntoView at exactly the same offset does not fire an intersection.
+      window.scrollBy(0,-Math.max(800,window.innerHeight*1.5));scan.probeUp=true;return;
+    }
+    if(recovery==='wait'&&!scan.probeUp)return;
+    scan.probeUp=false;
     if(continuation)continuation.scrollIntoView({block:'end'});else window.scrollTo(0,document.documentElement.scrollHeight);
   }
   async function pulse(){if(working)return;working=true;try{settings=await send({type:'capture-state'});await playback();await scanStep();}catch(e){if(scan)show('擴充功能暫時無法連線，請稍後或重新載入此頁。');}finally{working=false;}}

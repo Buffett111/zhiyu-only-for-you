@@ -3,6 +3,7 @@ import { loadConfig } from './config.js';
 import { createPool, migrate } from './db.js';
 import { catchupNeeded, createJobHandlers, enqueueHistory, historyYears, GLOBAL_JOB_KEY, QUEUES, safeError, trackedSecurities, type JobOutcome, type QueueName } from './jobs.js';
 import { pruneMarketCache } from './content-jobs';
+import { processMedia } from './media/jobs';
 
 const config = loadConfig();
 const pool = createPool(config.databaseUrl);
@@ -60,6 +61,10 @@ async function main() {
   boss = new PgBoss({ connectionString: config.databaseUrl, application_name: 'zhiyu-worker' });
   boss.on('error', error => console.error(JSON.stringify({ event: 'queue-error', message: safeError(error) })));
   await boss.start();
+  await boss.createQueue('media.enrich',{policy:'exclusive',retryLimit:2,retryDelay:120,expireInSeconds:600});
+  await boss.work('media.enrich',{batchSize:1},async()=>processMedia(pool,config));
+  await boss.schedule('media.enrich','* * * * *',{}, {singletonKey:'media.enrich'});
+  await boss.send('media.enrich',{}, {singletonKey:'media.enrich'});
   for (const name of QUEUES) {
     await boss.createQueue(name, { policy: name === 'digest.generate' ? 'stately' : 'exclusive', retryLimit: name === 'international.sync' ? 0 : 2, retryDelay: 120, retryBackoff: true, expireInSeconds: 3600 });
   }

@@ -79,13 +79,15 @@
     // Items carry the watch even without a progress bar as long as the date
     // group resolved; with neither there is nothing to report.
     if (progressPercent === null && resumeSeconds === null && watchedDate === null) return null;
-    const channelLink = root.querySelector('a[href^="/@"], a[href*="/channel/"]');
+    const channelLink = [...root.querySelectorAll('a[href]')].find(element => {
+      try { const url = new URL(element.href, location.origin); return ['www.youtube.com','m.youtube.com'].includes(url.hostname) && /^\/(?:@[^/]+|channel\/UC[A-Za-z0-9_-]{22})(?:\/|$)/.test(url.pathname) && element.textContent?.trim(); } catch { return false; }
+    });
     const channelId = channelLink?.getAttribute?.('href')?.match(/\/channel\/(UC[A-Za-z0-9_-]{10,})/)?.[1] ?? null;
     return {
       videoId,
       title: link.textContent?.trim() || null,
       channelId,
-      channelTitle: channelLink?.textContent?.trim() || null,
+      channelTitle: channelLink?.textContent?.trim() || channelNameFromMetadata(root),
       watchedDate,
       progressPercent,
       resumeSeconds: durationSeconds === null || resumeSeconds === null
@@ -142,6 +144,9 @@
     )];
     const expired = sections.slice(0, Math.max(0, sections.length - maximum));
     for (const section of expired) {
+      // A continuation can temporarily live in a date section during loading.
+      // Removing it disconnects YouTube's observer and strands the scan.
+      if (section.querySelector('ytd-continuation-item-renderer, [role="progressbar"]')) continue;
       const height = Math.max(
         1,
         Math.ceil(section.getBoundingClientRect?.().height ?? section.offsetHeight ?? 0),
@@ -195,9 +200,40 @@
   // not proof that the account's oldest entry was reached. Be conservative:
   // an unnecessary rescan is recoverable; a false coverage frontier is not.
   function historyCompletionReason(documentRoot = document) {
-    return documentRoot.querySelector('ytd-continuation-item-renderer')
+    return documentRoot.querySelector('ytd-continuation-item-renderer, tp-yt-paper-spinner[active], [role="progressbar"], yt-spinner')
       ? 'stalled'
       : 'history-start';
+  }
+
+  function channelNameFromMetadata(root) {
+    // Modern history lockups render the author as plain text, not an anchor.
+    const label = root.querySelector('yt-decorated-avatar-view-model [aria-label]')?.getAttribute('aria-label') ?? '';
+    const match = label.match(/^(?:前往頻道[：:]\s*|Go to channel[:：]?\s*|チャンネルに移動[:：]?\s*)(.+)$/i);
+    if (match) return match[1].trim();
+    const row = root.querySelector('yt-content-metadata-view-model .ytContentMetadataViewModelMetadataRow');
+    const parts = row?.querySelectorAll('.ytContentMetadataViewModelMetadataText');
+    // Require multiple fields: a lone views/date field is not an author.
+    return parts?.length >= 2 ? parts[0].textContent?.trim() || null : null;
+  }
+
+  // Absence during a request is not an end marker. Even after a long quiet
+  // period keep probing unless YouTube explicitly renders an end message.
+  function recoveryStep(state, { now, advanced, pending, hasItems, terminal=false }) {
+    if (advanced) { state.lastAdvance=now; state.absentSince=null; state.probes=0; state.attempts=0; state.nextProbe=now+10000; }
+    if (pending || !hasItems) state.absentSince=null;
+    else if (state.absentSince==null) { state.absentSince=now; state.probes=0; }
+    if (now-state.lastAdvance<10000) return 'scroll';
+    if (terminal && hasItems && !pending && state.absentSince!=null && now-state.absentSince>=180000 && state.probes>=4) return 'complete';
+    if (now >= (state.nextProbe??0)) {
+      state.attempts=(state.attempts??0)+1; state.probes=(state.probes??0)+1;
+      state.nextProbe=now+Math.min(60000,10000*2**Math.min(state.attempts-1,3));
+      return 'probe';
+    }
+    return 'wait';
+  }
+  function explicitHistoryEnd(documentRoot=document) {
+    return [...documentRoot.querySelectorAll('ytd-message-renderer, ytm-message-renderer')].some(e=>
+      /^(?:沒有更多(?:觀看)?紀錄|已顯示所有觀看紀錄|No more (?:watch )?history|You've reached the end of your watch history)[。.!\s]*$/i.test(e.textContent?.trim()??''));
   }
 
   function historyPageProblem(documentRoot = document) {
@@ -236,6 +272,8 @@
     coverageCutoffDay,
     dayTimestamp,
     historyCompletionReason,
+    recoveryStep,
+    explicitHistoryEnd,
     historyLandedUrl,
     historyPageProblem,
     historyScanDiagnostic,

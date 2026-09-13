@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "知隅 YouTube Capture",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "經授權後，自動將 YouTube 瀏覽與觀看紀錄同步至你的私人知隅帳號。",
   "minimum_chrome_version": "120",
   "permissions": [

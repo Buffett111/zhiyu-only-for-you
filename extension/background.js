@@ -23,7 +23,7 @@ async function bridge(active=false){const ids=await session();if(ids.bridgeTab){
 async function sendBridge(action,body){const id=await bridge();try{if((await chrome.tabs.get(id)).url!==BRIDGE)throw Error('請在知隅連接分頁完成登入；登入後會自動續傳。');const result=await chrome.tabs.sendMessage(id,{type:'bridge-request',action,body});if(!result?.ok)throw Object.assign(Error(result?.error||'等待知隅登入分頁。'),{status:result?.status});return result.data;}catch(e){throw Object.assign(Error(e.message?.includes('Receiving end')?'請在知隅連接分頁完成登入；登入後會自動續傳。':e.message),{status:e.status});}}
 async function connect(){if(!await permissions())throw Error('請先授權 YouTube 網站存取。');await prepare();const s=await read();if(s.binding)throw Error('請先解除目前帳號的綁定。');const tab=await chrome.tabs.create({url:BRIDGE,active:true});await chrome.storage.session.set({bridgeTab:tab.id,connectTab:tab.id,connectExpires:Date.now()+15*60000});}
 async function beginHistory(full=false,active=false){const s=await read();if(!s.binding||s.paused||!await permissions())return;
-  const ids=await session();if(ids.historyTab){try{await chrome.tabs.get(ids.historyTab);if(active)await chrome.tabs.update(ids.historyTab,{active:true});return;}catch{}}
+  const ids=await session();if(ids.historyTab){try{await chrome.tabs.get(ids.historyTab);if(active){await change(v=>{v.history={...v.history,running:true,full:full||!v.history.fullComplete,scanId:crypto.randomUUID(),startedAt:Date.now()};});await chrome.tabs.reload(ids.historyTab);await chrome.tabs.update(ids.historyTab,{active:true});}return;}catch{}}
   await change(v=>{v.history={...v.history,status:'正在開啟 YouTube 觀看紀錄頁',running:true,full:full||!v.history.fullComplete,scanId:crypto.randomUUID(),startedAt:Date.now()};});
   const tab=await chrome.tabs.create({url:'https://www.youtube.com/feed/history',active});await chrome.storage.session.set({historyTab:tab.id});
 }
@@ -59,6 +59,7 @@ async function handle(message,sender){
   if(youtubeSender(sender)){
     const s=await read(),ids=await session();
     if(message.type==='capture-state')return {enabled:!!s.binding&&!s.paused&&await permissions(),deviceId:s.binding?.deviceId,scan:sender.tab.id===ids.historyTab?{id:s.history.scanId,full:s.history.full,cutoff:s.history.lastCompletedAt?new Date(s.history.lastCompletedAt-2*86400000).toISOString().slice(0,10):null}:null};
+    if(message.type==='history-progress'&&sender.tab.id===ids.historyTab&&message.scanId===s.history.scanId){await change(v=>{if(v.history.scanId===message.scanId)v.history.status=String(message.status).slice(0,200);});return {ok:true};}
     if(message.type==='capture'){
       if(!s.binding||s.paused||message.deviceId!==s.binding.deviceId||!await permissions())return {ok:false,error:'已暫停或解除綁定。'};
       if(!Array.isArray(message.events)||message.events.length>200)throw Error('批次大小不正確。');

@@ -15,7 +15,8 @@ function event(input:Omit<MediaEvent,'eventId'>):MediaEvent|null{
   const watchedAt=time.toISOString(),id=videoId(input.videoId);
   const eventId=createHash('sha256').update(JSON.stringify([id??input.title,watchedAt,input.precision])).digest('hex');
   const seconds=input.actualSeconds;
-  return {...input,videoId:id,watchedAt,eventId,actualSeconds:typeof seconds==='number'&&Number.isFinite(seconds)&&seconds>=0&&seconds<=86400?Math.round(seconds):null};
+  const numeric=(v:unknown,max:number)=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=max?v:null;
+  return {...input,videoId:id,watchedAt,eventId,durationSeconds:numeric(input.durationSeconds,31536000)===null?null:Math.floor(input.durationSeconds!),progressPercent:numeric(input.progressPercent,100),resumeSeconds:numeric(input.resumeSeconds,31536000)===null?null:Math.floor(input.resumeSeconds!),actualSeconds:typeof seconds==='number'&&Number.isFinite(seconds)&&seconds>=0&&seconds<=86400?Math.round(seconds):null};
 }
 export function parseMediaImport(bytes:Uint8Array):{events:MediaEvent[];source:string;skipped:number;hash:string}{
   if(!bytes.length||bytes.length>MAX_MEDIA_BYTES)throw new MediaError('檔案大小須在 50 MB 以內。');
@@ -25,7 +26,7 @@ export function parseMediaImport(bytes:Uint8Array):{events:MediaEvent[];source:s
     try{files=unzipSync(bytes,{filter(file){
       if(++count>2000||file.name.startsWith('/')||file.name.includes('\\')||file.name.split('/').includes('..'))throw new MediaError('ZIP 結構不安全或檔案數過多。');
       const name=file.name.toLowerCase();
-      const wanted=['manifest.json','data/watch-events.json','data/activity-records.json','data/videos.json','data/personal-taxonomy.json','data/personal-taxonomy-runs.json','data/personal-topic-assignments.json'].includes(name)||/(^|\/)watch-history\.(json|html)$/.test(name)||/(^|\/)my activity\/youtube\/myactivity\.(json|html)$/.test(name);
+      const wanted=['manifest.json','data/watch-events.json','data/activity-records.json','data/videos.json','data/playback-progress.json','data/personal-taxonomy.json','data/personal-taxonomy-runs.json','data/personal-topic-assignments.json'].includes(name)||/(^|\/)watch-history\.(json|html)$/.test(name)||/(^|\/)my activity\/youtube\/myactivity\.(json|html)$/.test(name);
       if(!wanted)return false;
       expanded+=file.originalSize;
       if(!Number.isSafeInteger(expanded)||expanded>MAX_EXPANDED_BYTES)throw new MediaError('解壓縮後資料超過 200 MB 上限，請分批匯出。');
@@ -39,7 +40,7 @@ export function parseMediaImport(bytes:Uint8Array):{events:MediaEvent[];source:s
   const rawFile=files['watch-history.json'];
   if(rawFile){const exported=json(rawFile);if(exported?.format==='zhiyu-media-export'){
     if(exported.version!==1)throw new MediaError('不支援這個知隅匯出版本。');
-    const rows=array(exported.events);const events=rows.map(row=>event({videoId:videoId(row.videoId),title:text(row.title),channel:text(row.channel,160)||null,watchedAt:text(row.watchedAt,80),actualSeconds:row.actualSeconds,precision:row.precision==='day'?'day':'exact',topics:Array.isArray(row.topics)?row.topics.filter((t:unknown)=>typeof t==='string').slice(0,3).map((t:string)=>t.slice(0,80)):[],topicSource:text(row.topicSource,80)||null,source:'知隅匯出'})).filter((v):v is MediaEvent=>Boolean(v));
+    const rows=array(exported.events);const events=rows.map(row=>event({videoId:videoId(row.videoId),title:text(row.title),channel:text(row.channel,160)||null,watchedAt:text(row.watchedAt,80),actualSeconds:row.actualSeconds,durationSeconds:row.durationSeconds,progressPercent:row.progressPercent,resumeSeconds:row.resumeSeconds,precision:row.precision==='day'?'day':'exact',topics:Array.isArray(row.topics)?row.topics.filter((t:unknown)=>typeof t==='string').slice(0,3).map((t:string)=>t.slice(0,80)):[],topicSource:text(row.topicSource,80)||null,source:'知隅匯出'})).filter((v):v is MediaEvent=>Boolean(v));
     if(!events.length||events.length>200000)throw new MediaError('知隅匯出檔需包含 1 至 20 萬筆有效紀錄。');
     const unique=[...new Map(events.map(item=>[item.eventId,item])).values()];return {events:unique,source:'知隅匯出',skipped:rows.length-unique.length,hash:createHash('sha256').update(bytes).digest('hex')};
   }}
@@ -52,6 +53,7 @@ export function parseMediaImport(bytes:Uint8Array):{events:MediaEvent[];source:s
     const read=(name:string)=>files[name]?array(json(files[name])):[];
     const precisions=new Map(read('data/activity-records.json').map(row=>[row.id,row.occurred_precision]));
     const videos=new Map(read('data/videos.json').map(v=>[v.video_id,v]));
+    const progress=new Map(read('data/playback-progress.json').map(v=>[v.video_id,v]));
     const runs=read('data/personal-taxonomy-runs.json');
     const active=runs.filter(r=>r.status==='active').sort((a,b)=>Number(b.taxonomy_version)-Number(a.taxonomy_version))[0]?.taxonomy_version;
     const definitions=read('data/personal-taxonomy.json');
@@ -69,7 +71,7 @@ export function parseMediaImport(bytes:Uint8Array):{events:MediaEvent[];source:s
       seen++;if(row.activity_type&&row.activity_type!=='video')continue;
       const video=videos.get(row.video_id);
       const labels=assignments.get(row.video_id)??[];
-      const parsed=event({videoId:videoId(row.video_id),title:text(row.raw_title)||text(video?.title)||'無法取得影片名稱',channel:text(row.channel_title,160)||text(video?.channel_title,160)||null,watchedAt:text(row.watched_at,80),actualSeconds:row.actual_watched_seconds,precision:precisions.get(row.activity_id)==='day'?'day':'exact',topics:labels,topicSource:labels.length?'urTube':null,source});
+      const parsed=event({videoId:videoId(row.video_id),title:text(row.raw_title)||text(video?.title)||'無法取得影片名稱',channel:text(row.channel_title,160)||text(video?.channel_title,160)||null,watchedAt:text(row.watched_at,80),actualSeconds:row.actual_watched_seconds,durationSeconds:video?.duration_seconds??progress.get(row.video_id)?.duration_seconds,progressPercent:progress.get(row.video_id)?.progress_percent,resumeSeconds:progress.get(row.video_id)?.resume_seconds,precision:precisions.get(row.activity_id)==='day'?'day':'exact',topics:labels,topicSource:labels.length?'urTube':null,source});
       if(parsed)events.push(parsed);
     }
   }else{
