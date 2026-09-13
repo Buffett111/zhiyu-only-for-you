@@ -30,3 +30,16 @@ export interface FinancialReport {
  sourceUrl: string; fetchedAt: string;
 }
 export interface ContentProgress { kind: 'financials' | 'news'; status: 'pending' | 'success' | 'partial' | 'error'; lastAttempt: string; lastSuccess: string | null; error: string | null; }
+
+export type NewsScope = 'all' | 'direct' | 'constituent' | 'market';
+export interface AnalysisPoint { text: string; sourceIds: string[]; }
+export interface NewsAnalysis {
+ model: string; generatedAt: string; basis: 'headlines'; from: string; to: string;
+ overview: AnalysisPoint; facts: AnalysisPoint[]; implications: AnalysisPoint[]; watchpoints: AnalysisPoint[];
+ sources: { id: string; title: string; url: string; source: string; publishedAt: string; relation: string }[];
+ usage: { inputTokens: number; outputTokens: number };
+}
+export interface NewsAnalysisState {
+ enabled: boolean; status: 'empty' | 'pending' | 'ready' | 'error'; analysis: NewsAnalysis | null;
+ error: string | null; stale: boolean; availableCount: number; selectedCount: number;
+}

@@ -21,7 +21,8 @@ export default {
     const target = new URL(url.pathname + url.search, origin);
     if (target.origin !== origin) return jsonError('無法處理此路徑。', 400);
     const forwarded = new Request(target, request);
-    const proxy = new Request(forwarded, { headers, redirect: 'manual', signal: AbortSignal.timeout(12000) });
+    const isAnalysis = request.method === 'POST' && /^\/api\/v1\/finance\/securities\/[^/]+\/news-analysis$/.test(url.pathname);
+    const proxy = new Request(forwarded, { headers, redirect: 'manual', signal: AbortSignal.timeout(isAnalysis ? 65000 : 12000) });
     try {
       const response = await env.PRIVATE_API.fetch(proxy);
       if (response.status >= 500) return jsonError('本機暫時離線，恢復連線後會自動補抓資料。', 503);

@@ -11,7 +11,7 @@ const example = files.includes('.env.example') ? parse(execFileSync('git', ['sho
 // Only the documented, reserved-domain development identity is a public default.
 // Never exempt passwords/tokens just because somebody also copied them into the example.
 const isPublicDefault = (key: string, value: string) => key === 'DEV_USER_EMAIL' && value === example[key] && /^[^\s@]+@(?:[a-z\d-]+\.)*invalid$/i.test(value);
-const privateValues = Object.entries(env).filter(([key, value]) => /SECRET|PASSWORD|PASSPHRASE|TOKEN|DATABASE_URL|EMAIL|ACCOUNT_ID|TEAM_DOMAIN|ACCESS_AUD|VPC_SERVICE_ID/.test(key) && !isPublicDefault(key, value))
+const privateValues = Object.entries(env).filter(([key, value]) => /SECRET|API_KEY|PASSWORD|PASSPHRASE|TOKEN|DATABASE_URL|EMAIL|ACCOUNT_ID|TEAM_DOMAIN|ACCESS_AUD|VPC_SERVICE_ID/.test(key) && !isPublicDefault(key, value))
   .flatMap(([key, value]) => (key.endsWith('EMAILS') ? value.split(',') : [value]).map(value => [key, value.trim()] as const)).filter(([, value]) => value.length >= 8);
 const local = JSON.parse(await readFile('wrangler.local.jsonc', 'utf8').catch(() => '{}')) as { vpc_services?: { service_id?: string }[] };
 for (const binding of local.vpc_services ?? []) if (binding.service_id) privateValues.push(['local VPC service binding', binding.service_id]);

@@ -3,6 +3,7 @@ export interface Config {
   mode: 'development' | 'production'; databaseUrl: string; host: string; port: number;
   publicOrigin: string; devUserEmail: string; devUserName: string;
   accessTeamDomain: string; accessAud: string; allowedEmails: string[]; adminEmails: string[];
+  openaiApiKey?: string; aiDailyLimit?: number;
 }
 const emails = (value = '') => value.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -17,7 +18,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: z.string().min(1, 'DATABASE_URL is required; run npm run setup').parse(env.DATABASE_URL),
     publicOrigin, devUserEmail: z.email().parse(env.DEV_USER_EMAIL || 'local@zhiyu.invalid'),
     devUserName: env.DEV_USER_NAME || '我的知隅', accessTeamDomain: (env.ACCESS_TEAM_DOMAIN || '').replace(/^https:\/\//, '').replace(/\/$/, ''),
-    accessAud: env.ACCESS_AUD || '', allowedEmails: emails(env.ALLOWED_EMAILS), adminEmails: emails(env.ADMIN_EMAILS)
+    accessAud: env.ACCESS_AUD || '', allowedEmails: emails(env.ALLOWED_EMAILS), adminEmails: emails(env.ADMIN_EMAILS),
+    openaiApiKey: env.OPENAI_API_KEY?.trim() || undefined,
+    aiDailyLimit: z.coerce.number().int().min(0).max(1000).parse(env.AI_DAILY_REQUEST_LIMIT ?? '40')
   };
   if (mode === 'production') {
     if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(config.accessTeamDomain) || !config.accessAud) throw new Error('Production requires ACCESS_TEAM_DOMAIN and ACCESS_AUD.');

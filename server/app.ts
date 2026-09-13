@@ -16,10 +16,12 @@ import { enqueueHistory, historyYears } from './jobs';
 import { supportsEtfHoldings } from './providers/etf-news';
 import { searchYahoo, YahooUnavailable } from './providers/yahoo';
 import { regionOf, exchangeDate, timeZoneOf } from '../shared/markets';
+import { createNewsAnalysisService } from './news-analysis';
+import { AnalysisError, summarizeNews } from './providers/openai-news';
 
 declare module 'fastify' { interface FastifyRequest { zhiyuUser: User; } }
 export interface JobQueue { send(name: string, data?: object, options?: object): Promise<unknown>; }
-interface AppOptions { pool: Pool; config: Config; queue?: JobQueue; verifyIdentity?: (request: FastifyRequest) => Promise<Identity>; logger?: boolean; yahooSearch?: typeof searchYahoo; }
+interface AppOptions { pool: Pool; config: Config; queue?: JobQueue; verifyIdentity?: (request: FastifyRequest) => Promise<Identity>; logger?: boolean; yahooSearch?: typeof searchYahoo; newsSummarizer?: typeof summarizeNews; }
 const dateOnly = (v: string | Date) => typeof v === 'string' ? v.slice(0, 10) : v.toISOString().slice(0, 10);
 const iso = (v: Date | string | null) => v ? new Date(v).toISOString() : null;
 export function mapSecurity(row: Record<string, any>): Security {
@@ -44,7 +46,8 @@ export function historyWindow(today: string, range: '1m' | '3m' | '1y' | '3y' | 
   return { requestedFrom: from.toISOString().slice(0, 10), months };
 }
 
-export async function buildApp({ pool, config, queue, verifyIdentity = createIdentityVerifier(config), logger = true, yahooSearch = searchYahoo }: AppOptions) {
+export async function buildApp({ pool, config, queue, verifyIdentity = createIdentityVerifier(config), logger = true, yahooSearch = searchYahoo, newsSummarizer = summarizeNews }: AppOptions) {
+  const aiNews = createNewsAnalysisService(pool, config, newsSummarizer);
   const app = Fastify({ logger: logger ? { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["cf-access-jwt-assertion"]', 'res.headers["set-cookie"]'] } : false, disableRequestLogging: true, bodyLimit: 16384, trustProxy: false });
   await app.register(helmet, { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"] } } });
   app.decorateRequest('zhiyuUser', null as unknown as User);
@@ -52,6 +55,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     if (error instanceof z.ZodError) return reply.code(400).send({ error: '輸入格式不正確，請檢查欄位。' });
     if (error instanceof AccessError) return reply.code(error.statusCode).send({ error: error.message });
     if (error instanceof YahooUnavailable) return reply.code(424).send({ error: error.message });
+    if (error instanceof AnalysisError) return reply.code(error.statusCode).send({ error: error.message });
     const status = (error as {statusCode?: number}).statusCode;
     if (status && status >= 400 && status < 500) return reply.code(status).send({ error: status === 429 ? '操作太頻繁，請稍後再試。' : '無法處理此請求。' });
     request.log.error({ errorType: error instanceof Error ? error.name : 'Error', code: (error as any)?.code }, 'Request failed');
@@ -219,6 +223,13 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
       ORDER BY n.published_at DESC LIMIT 100`, [input.securityId || null, input.kind || null, request.zhiyuUser.id,input.scope]);
     return rows.rows.map(r => r.data);
   });
+  const analysisInput = z.object({kind:z.enum(['news','announcement']).default('news'),scope:z.enum(['all','direct','constituent','market']).default('all')}).strict();
+  for (const method of ['GET','POST'] as const) app.route<{Params:{id:string}}>({method,url:'/api/v1/finance/securities/:id/news-analysis',preHandler:requireFinance,handler:async request=>{
+    const selection=analysisInput.parse(method==='GET'?request.query:request.body);
+    if (!(await pool.query('SELECT 1 FROM watchlist WHERE user_id=$1 AND security_id=$2',[request.zhiyuUser.id,request.params.id])).rowCount) throw new AccessError(404,'請先將此標的加入自己的追蹤清單。');
+    const security=await getSecurity(request.params.id);
+    return method==='GET'?aiNews.read(security,selection):aiNews.run(security,selection);
+  }});
   app.get('/api/v1/finance/digests', { preHandler: requireFinance }, async request => (await pool.query('SELECT * FROM digests WHERE user_id=$1 ORDER BY date DESC LIMIT 30', [request.zhiyuUser.id])).rows.map(digest));
   app.put<{ Params: { date: string } }>('/api/v1/finance/digests/:date/read', { preHandler: requireFinance }, async request => {
     const date = z.iso.date().parse(request.params.date);
