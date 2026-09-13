@@ -5,6 +5,6 @@ export interface MediaSummary {
  from:string|null;to:string|null;channels:MediaRanking[];topics:MediaRanking[];classifiedEvents:number;
  daily:{date:string;count:number}[];hourly:{hour:number;count:number}[];
  imports:{source:string;inserted:number;skipped:number;importedAt:string}[];
- aiEnabled:boolean;unclassifiedVideos:number;
+ aiEnabled:boolean;aiBatchSize:number;aiConcurrency:number;unclassifiedVideos:number;
  estimatedSeconds:number|null;estimatedEvents:number;progressEvents:number;durationOnlyEvents:number;
 }

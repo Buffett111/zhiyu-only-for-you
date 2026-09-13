@@ -1,3 +1,4 @@
+import { mediaAiSettings } from './ai-batches';
 import type { Pool,PoolClient } from 'pg';
 import type { MediaEvent,MediaSummary } from '../../shared/media';
 import type { Config } from '../config';
@@ -53,6 +54,6 @@ export async function mediaSummary(pool:Pool,userId:string,range:typeof MEDIA_RA
   ]);
   const t=totals.rows[0],c=counts.rows[0];
   const rank=(rows:Record<string,any>[])=>rows.map(row=>({name:row.name,count:row.count,share:c.selected?row.count/c.selected:0,previousCount:row.previous??0}));
-  return {range,total:t.total,selected:c.selected,uniqueVideos:c.videos,activeDays:c.days,recordedSeconds:c.seconds,timedEvents:c.timed,estimatedSeconds:c.estimated,estimatedEvents:c.estimated_events,progressEvents:c.progress_events,durationOnlyEvents:c.duration_only,from:t.first?.toISOString()??null,to:t.last?.toISOString()??null,channels:rank(channels.rows),topics:rank(topics.rows),classifiedEvents:c.classified,daily:daily.rows,hourly:hourly.rows,imports:imports.rows.map(row=>({source:row.source,inserted:row.inserted,skipped:row.skipped,importedAt:row.imported_at.toISOString()})),aiEnabled:Boolean(config.openaiApiKey)&&(config.aiDailyLimit??40)>0,unclassifiedVideos:unclassified.rows[0].count};
+  return {range,total:t.total,selected:c.selected,uniqueVideos:c.videos,activeDays:c.days,recordedSeconds:c.seconds,timedEvents:c.timed,estimatedSeconds:c.estimated,estimatedEvents:c.estimated_events,progressEvents:c.progress_events,durationOnlyEvents:c.duration_only,from:t.first?.toISOString()??null,to:t.last?.toISOString()??null,channels:rank(channels.rows),topics:rank(topics.rows),classifiedEvents:c.classified,daily:daily.rows,hourly:hourly.rows,imports:imports.rows.map(row=>({source:row.source,inserted:row.inserted,skipped:row.skipped,importedAt:row.imported_at.toISOString()})),aiBatchSize:mediaAiSettings(config).videoBatchSize,aiConcurrency:mediaAiSettings(config).concurrency,aiEnabled:Boolean(config.openaiApiKey)&&(config.aiDailyLimit??40)>0,unclassifiedVideos:unclassified.rows[0].count};
 }
 export function mapMediaEvent(row:Record<string,any>):MediaEvent{return {eventId:row.event_id,videoId:row.video_id,title:row.title,channel:row.channel,watchedAt:row.watched_at.toISOString(),actualSeconds:row.actual_seconds,durationSeconds:row.duration_seconds,progressPercent:row.progress_percent,resumeSeconds:row.resume_seconds,estimatedSeconds:row.estimated_seconds,precision:row.precision,topics:row.topics,topicSource:row.topic_source,source:row.source};}

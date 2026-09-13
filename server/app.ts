@@ -52,7 +52,7 @@ export function historyWindow(today: string, range: '1m' | '3m' | '1y' | '3y' | 
 export async function buildApp({ pool, config, queue, verifyIdentity = createIdentityVerifier(config), logger = true, yahooSearch = searchYahoo, newsSummarizer = summarizeNews, mediaClassifier = classifyMediaTitles }: AppOptions) {
   const aiNews = createNewsAnalysisService(pool, config, newsSummarizer);
   const app = Fastify({ logger: logger ? { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["cf-access-jwt-assertion"]', 'res.headers["set-cookie"]'] } : false, disableRequestLogging: true, bodyLimit: 16384, trustProxy: false });
-  await app.register(helmet, { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"] } } });
+  await app.register(helmet, { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:', 'https://yt3.ggpht.com', 'https://yt3.googleusercontent.com'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"] } } });
   app.decorateRequest('zhiyuUser', null as unknown as User);
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ error: '輸入格式不正確，請檢查欄位。' });
@@ -257,7 +257,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
       await client.query('SELECT 1 FROM user_modules WHERE user_id=$1 FOR UPDATE', [request.zhiyuUser.id]);
       await client.query('DELETE FROM watchlist WHERE user_id=$1', [request.zhiyuUser.id]);
       await client.query('DELETE FROM digests WHERE user_id=$1', [request.zhiyuUser.id]);
-      for(const table of ['media_events','media_imports','media_classifications','media_ai_state','media_devices','media_video_metadata','media_channel_labels','media_processing']) await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);
+      for(const table of ['media_events','media_imports','media_classifications','media_ai_state','media_devices','media_video_metadata','media_channel_labels','media_processing','media_channel_icons']) await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);
       await client.query("UPDATE user_modules SET enabled=false,config='{}',widgets='[]',config_version=1 WHERE user_id=$1", [request.zhiyuUser.id]);
       await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }

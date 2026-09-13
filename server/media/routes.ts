@@ -34,7 +34,7 @@ export function registerMediaRoutes(app:FastifyInstance,pool:Pool,config:Config,
   });
   app.get('/api/v1/media/channels',{preHandler:enabled},async request=>{
     const p=z.object({range:z.enum(MEDIA_RANGES).default('90d'),q:z.string().max(160).default(''),category:z.string().max(80).default(''),sort:z.enum(['count','time']).default('count'),page:z.coerce.number().int().min(0).max(25000).default(0)}).parse(request.query);
-    return channelOverview(pool,request.zhiyuUser.id,p.range,p.q,p.category,p.page,p.sort);
+    return channelOverview(pool,request.zhiyuUser.id,p.range,p.q,p.category,p.page,p.sort,config);
   });
   app.get('/api/v1/media/channel',{preHandler:enabled},async request=>{
     const p=z.object({key:z.string().max(500),range:z.enum(MEDIA_RANGES).default('90d')}).parse(request.query);
@@ -55,7 +55,7 @@ export function registerMediaRoutes(app:FastifyInstance,pool:Pool,config:Config,
   });
   app.post('/api/v1/media/clear',async request=>{
     z.object({confirm:z.literal(true)}).strict().parse(request.body);
-    const client=await pool.connect();try{await client.query('BEGIN');await client.query("SELECT 1 FROM user_modules WHERE user_id=$1 AND module_id='media' FOR UPDATE",[request.zhiyuUser.id]);for(const table of ['media_events','media_imports','media_classifications','media_ai_state','media_devices','media_video_metadata','media_channel_labels','media_processing'])await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);await client.query('COMMIT');return {deleted:true};}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+    const client=await pool.connect();try{await client.query('BEGIN');await client.query("SELECT 1 FROM user_modules WHERE user_id=$1 AND module_id='media' FOR UPDATE",[request.zhiyuUser.id]);for(const table of ['media_events','media_imports','media_classifications','media_ai_state','media_devices','media_video_metadata','media_channel_labels','media_processing','media_channel_icons'])await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);await client.query('COMMIT');return {deleted:true};}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
   });
   app.get('/api/v1/media/export',async(request,reply)=>{
     const userId=request.zhiyuUser.id;

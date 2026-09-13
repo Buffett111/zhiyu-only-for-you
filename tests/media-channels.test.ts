@@ -62,7 +62,7 @@ describe('public metadata and inspectable channel classification',()=>{
  });
  it('honors daily batch limits and drops in-flight suggestions after consent is withdrawn',async()=>{
   await enrichMediaMetadata(pool,bob,async()=>({status:'ready',title:'Fixture programming',channel:'Fixture',channelKey:'https://www.youtube.com/channel/UC'+'b'.repeat(22)}));await setChannelAutomation(pool,bob,true);
-  await pool.query("UPDATE media_processing SET daily_batches=8,usage_day=(now() AT TIME ZONE 'Asia/Taipei')::date WHERE user_id=$1",[bob]);const unused=vi.fn();expect(await classifyChannels(pool,config,bob,unused)).toBe(0);expect(unused).not.toHaveBeenCalled();
+  await pool.query("UPDATE media_processing SET daily_batches=200,usage_day=(now() AT TIME ZONE 'Asia/Taipei')::date WHERE user_id=$1",[bob]);const unused=vi.fn();expect(await classifyChannels(pool,config,bob,unused)).toBe(0);expect(unused).not.toHaveBeenCalled();
   await pool.query('UPDATE media_processing SET daily_batches=0 WHERE user_id=$1',[bob]);
   await classifyChannels(pool,config,bob,async(_key,samples)=>{await setChannelAutomation(pool,bob,false);return {channels:samples.map(s=>({key:s.key,category:'科技' as const,confidence:.9,evidence:[]})),usage:{inputTokens:1,outputTokens:1}};});
   expect((await channelOverview(pool,bob,'all')).categorized).toBe(0);
