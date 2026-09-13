@@ -6,7 +6,7 @@ export const financeModule: ModuleDefinition = { id: 'finance', name: '財經', 
   { id: 'news', name: '新聞與公告', description: '閱讀相關新聞與公司公告，附上原始出處。' },
   { id: 'fundamentals', name: '公司基本面', description: '台股月營收、美日季度與年度財報，保留來源幣別及期間。' }
 ] };
-export const mediaModule: ModuleDefinition = {id:'media',name:'影音分析',description:'從 urTube 與 YouTube 觀看紀錄，回顧常看的頻道、主題與興趣變化。',version:'1.1.0',configVersion:1,icon:'video',routes:['/media'],jobs:['media.enrich'],widgets:[
+export const mediaModule: ModuleDefinition = {id:'media',name:'影音分析',description:'從 urTube 與 YouTube 觀看紀錄，回顧常看的頻道、主題與興趣變化。',version:'1.2.0',configVersion:1,icon:'video',routes:['/media'],jobs:['media.metadata','media.icons','media.classify'],widgets:[
   {id:'overview',name:'觀看概況',description:'觀看次數、影片與有紀錄的觀看時間。'},
   {id:'channels',name:'頻道探索與分類',description:'內容分類、來源標籤、頻道明細與可檢視的 AI 建議。'},
   {id:'topics',name:'興趣主題',description:'沿用 urTube 分類，按需補充 AI 分析。'},

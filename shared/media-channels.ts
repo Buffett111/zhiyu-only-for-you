@@ -9,6 +9,6 @@ export interface ChannelOverview {
  items:MediaChannel[];hasMore:boolean;totalChannels:number;selected:number;identified:number;categorized:number;
  categories:{name:string;count:number;channels:number}[];
  curator:{available:boolean;sourceTime:string|null;fetchedAt:string|null;version:string|null;groups:{name:string;count:number}[]};
- metadata:{total:number;ready:number;unavailable:number;errors:number;pending:number};
+ metadata:{total:number;ready:number;unavailable:number;errors:number;pending:number;perMinute:number;estimatedMinutes:number|null;batchSize:number;concurrency:number};
  processing:{autoClassify:boolean;status:string;error:string|null;lastSuccess:string|null;dailyBatches:number;dailyLimit:number;batchSize:number;concurrency:number;activeBatches:number};
 }

@@ -8,6 +8,7 @@ import {classifyChannels,setChannelAutomation,channelOverview,generateChannelLab
 import {analyzeMedia} from '../server/media/analysis';
 import {fetchChannelIcon,enrichChannelIcons,youtubeIconUrl} from '../server/media/icons';
 import {MediaRateLimit,checkRateLimit} from '../server/media/ai-batches';
+import {enrichMediaMetadata,YoutubeMetadataRateLimit} from '../server/media/metadata';
 vi.mock('../server/media/channel-tags',async original=>({...await original<typeof import('../server/media/channel-tags')>(),contentTags:async()=>null}));
 const schema=`zhiyu_throughput_test_${randomUUID().replaceAll('-','')}`;
 const admin=new pg.Pool({connectionString:process.env.DATABASE_URL});
@@ -106,4 +107,23 @@ it('caches icons per saved channel, retries transient failures and never recreat
  await pool.query("UPDATE media_channel_icons SET retry_after=now()-interval '1 second' WHERE user_id=$1",[id]);
  await enrichChannelIcons(pool,id,async()=>{await pool.query('DELETE FROM media_events WHERE user_id=$1',[id]);await pool.query('DELETE FROM media_channel_icons WHERE user_id=$1',[id]);return 'https://yt3.ggpht.com/fixture';});
  expect((await pool.query('SELECT 1 FROM media_channel_icons WHERE user_id=$1',[id])).rowCount).toBe(0);
+});
+it('uses six concurrent metadata lookups and continues past isolated video errors',async()=>{
+ const id=await owner(18);let entered!:()=>void,release!:()=>void,active=0,peak=0,calls=0;
+ const reached=new Promise<void>(r=>entered=r),barrier=new Promise<void>(r=>release=r);
+ const task=enrichMediaMetadata(pool,id,async()=>{
+  const n=++calls;peak=Math.max(peak,++active);if(calls===6)entered();await barrier;active--;
+  if(n%3===0)throw Error('isolated bad metadata');
+  return {status:'ready',title:'Fixture',channel:'Fixture',channelKey:publicKey(1)};
+ },18,6);
+ await reached;expect(peak).toBe(6);release();expect(await task).toEqual({ready:12,errors:6});expect(calls).toBe(18);
+});
+it('stops a rate-limited provider wave and persists a cooldown shared by accounts and icons',async()=>{
+ const [a,b]=await Promise.all([owner(18),owner(2)]);
+ const get=vi.fn(async()=>{throw new YoutubeMetadataRateLimit();});
+ try{
+  expect(await enrichMediaMetadata(pool,a,get,18,6)).toEqual({ready:0,errors:6});expect(get).toHaveBeenCalledTimes(6);
+  const unused=vi.fn();expect(await enrichMediaMetadata(pool,b,unused)).toEqual({ready:0,errors:0});expect(unused).not.toHaveBeenCalled();
+  expect(await enrichChannelIcons(pool,b,unused)).toEqual({ready:0,errors:0});expect(unused).not.toHaveBeenCalled();
+ }finally{await pool.query("DELETE FROM scheduler_state WHERE key='media.youtube.cooldown'");}
 });

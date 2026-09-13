@@ -89,12 +89,12 @@ describe('authenticated extension device binding',()=>{
   await sync({},[{...event,actualSeconds:45} as typeof event]);await sync({},[{...event,actualSeconds:20} as typeof event]);
   const summary=(await app.inject({url:'/api/v1/media/summary?range=all',headers})).json();expect(summary).toMatchObject({total:1,recordedSeconds:45});expect(summary.imports).toHaveLength(0);
  });
- it('preserves history dates, duration and progress, estimating day-only watches with the urTube ten-minute cap',async()=>{
+ it('preserves history dates, duration and progress, estimating only saved progress with a ten-minute cap, never video length alone',async()=>{
   const input=[{...event,videoId:'cdefghijklm',precision:'day',durationSeconds:3600,progressPercent:50,resumeSeconds:300},{...event,videoId:'defghijklmn',precision:'day',durationSeconds:120,progressPercent:25},{...event,videoId:'efghijklmno',precision:'day',durationSeconds:180}] as typeof event[];
   expect((await sync({},input)).statusCode).toBe(200);await sync({},input);
   const rows=(await pool.query('SELECT video_id,duration_seconds,progress_percent,estimated_seconds FROM media_events WHERE user_id=$1 ORDER BY video_id',[binding.userId])).rows;
-  expect(rows.find(r=>r.video_id==='cdefghijklm')).toMatchObject({duration_seconds:3600,progress_percent:50,estimated_seconds:600});expect(rows.find(r=>r.video_id==='defghijklmn')?.estimated_seconds).toBe(30);expect(rows.find(r=>r.video_id==='efghijklmno')?.estimated_seconds).toBe(180);
-  const summary=(await app.inject({url:'/api/v1/media/summary?range=all',headers})).json();expect(summary).toMatchObject({recordedSeconds:45,estimatedSeconds:855,progressEvents:2,durationOnlyEvents:1});
+  expect(rows.find(r=>r.video_id==='cdefghijklm')).toMatchObject({duration_seconds:3600,progress_percent:50,estimated_seconds:600});expect(rows.find(r=>r.video_id==='defghijklmn')?.estimated_seconds).toBe(30);expect(rows.find(r=>r.video_id==='efghijklmno')?.estimated_seconds).toBeNull();
+  const summary=(await app.inject({url:'/api/v1/media/summary?range=all',headers})).json();expect(summary).toMatchObject({recordedSeconds:45,estimatedSeconds:675,progressEstimatedSeconds:630,progressEvents:2,durationOnlyEvents:1});
   const exported=(await app.inject({url:'/api/v1/media/export?part=1',headers})).json();expect(exported.events.find((e:any)=>e.videoId==='cdefghijklm')).toMatchObject({watchedAt:timestamp,durationSeconds:3600,progressPercent:50,estimatedSeconds:600});
  });
  it('rejects late writes after device revocation and after clearing all media data',async()=>{

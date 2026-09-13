@@ -27,6 +27,7 @@ export async function fetchChannelIcon(channel:string,request:typeof fetch=fetch
  return null;
 }
 export async function enrichChannelIcons(pool:Pool,userId:string,getIcon=fetchChannelIcon,limit=60){
+ if((await pool.query("SELECT 1 FROM scheduler_state WHERE key='media.youtube.cooldown' AND (value->>'until')::timestamptz>now() LIMIT 1")).rowCount)return {ready:0,errors:0};
  const pending=(await pool.query(`SELECT m.channel_key FROM media_video_metadata m
  LEFT JOIN media_channel_icons i ON i.user_id=m.user_id AND i.channel_key=m.channel_key
  WHERE m.user_id=$1 AND m.channel_key LIKE 'https://www.youtube.com/channel/%'

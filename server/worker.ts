@@ -63,8 +63,15 @@ async function main() {
   await boss.start();
   await boss.createQueue('media.enrich',{policy:'exclusive',retryLimit:2,retryDelay:120,expireInSeconds:600});
   await boss.work('media.enrich',{batchSize:1},async()=>processMedia(pool,config));
-  await boss.schedule('media.enrich','* * * * *',{}, {singletonKey:'media.enrich'});
-  await boss.send('media.enrich',{}, {singletonKey:'media.enrich'});
+  // Drain old queued work, but schedule independent pipelines from now on.
+  await boss.unschedule('media.enrich');
+  for(const kind of ['metadata','icons','classify'] as const){
+    const name=`media.${kind}`;
+    await boss.createQueue(name,{policy:'exclusive',retryLimit:2,retryDelay:120,expireInSeconds:600});
+    await boss.work(name,{batchSize:1},async()=>processMedia(pool,config,kind));
+    await boss.schedule(name,'* * * * *',{}, {singletonKey:name});
+    await boss.send(name,{}, {singletonKey:name});
+  }
   for (const name of QUEUES) {
     await boss.createQueue(name, { policy: name === 'digest.generate' ? 'stately' : 'exclusive', retryLimit: name === 'international.sync' ? 0 : 2, retryDelay: 120, retryBackoff: true, expireInSeconds: 3600 });
   }

@@ -6,5 +6,5 @@ export interface MediaSummary {
  daily:{date:string;count:number}[];hourly:{hour:number;count:number}[];
  imports:{source:string;inserted:number;skipped:number;importedAt:string}[];
  aiEnabled:boolean;aiBatchSize:number;aiConcurrency:number;unclassifiedVideos:number;
- estimatedSeconds:number|null;estimatedEvents:number;progressEvents:number;durationOnlyEvents:number;
+ estimatedSeconds:number|null;estimatedEvents:number;progressEvents:number;progressEstimatedSeconds:number|null;durationOnlyEvents:number;
 }

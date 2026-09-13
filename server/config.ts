@@ -5,6 +5,7 @@ export interface Config {
   accessTeamDomain: string; accessAud: string; allowedEmails: string[]; adminEmails: string[];
   openaiApiKey?: string; aiDailyLimit?: number;
   mediaChannelBatchSize?:number; mediaVideoBatchSize?:number; mediaAiConcurrency?:number; mediaAiDailyBatches?:number;
+  mediaMetadataBatchSize?:number; mediaMetadataConcurrency?:number;
 }
 const emails = (value = '') => value.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -25,7 +26,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     mediaChannelBatchSize:z.coerce.number().int().min(1).max(48).parse(env.MEDIA_CHANNEL_BATCH_SIZE ?? '32'),
     mediaVideoBatchSize:z.coerce.number().int().min(1).max(150).parse(env.MEDIA_VIDEO_BATCH_SIZE ?? '100'),
     mediaAiConcurrency:z.coerce.number().int().min(1).max(6).parse(env.MEDIA_AI_CONCURRENCY ?? '4'),
-    mediaAiDailyBatches:z.coerce.number().int().min(0).max(1000).parse(env.MEDIA_AI_DAILY_BATCH_LIMIT ?? '200')
+    mediaAiDailyBatches:z.coerce.number().int().min(0).max(1000).parse(env.MEDIA_AI_DAILY_BATCH_LIMIT ?? '200'),
+    mediaMetadataBatchSize:z.coerce.number().int().min(1).max(240).parse(env.MEDIA_METADATA_BATCH_SIZE ?? '180'),
+    mediaMetadataConcurrency:z.coerce.number().int().min(1).max(8).parse(env.MEDIA_METADATA_CONCURRENCY ?? '6')
   };
   if (mode === 'production') {
     if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(config.accessTeamDomain) || !config.accessAud) throw new Error('Production requires ACCESS_TEAM_DOMAIN and ACCESS_AUD.');
