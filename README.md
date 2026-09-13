@@ -8,6 +8,8 @@
 
 新聞標題、原文連結與財報來源提供 **按需開啟 Google 翻譯**，預設繁體中文，也可選英文／日文；目標語言隨帳號同步。這是外部翻譯入口，原文保留，不在背景翻譯或儲存新聞全文。部分原文仍可能需要出版者訂閱。
 
+新增 **urTube 影音分析模組**：匯入 urTube／YouTube 觀看紀錄，查看頻道、主題與觀看趨勢；私人資料保存在本機，支援匯出與按需 AI 分類。使用方式見[影音模組文件](docs/media-module.md)。
+
 ## 本機執行
 
 需要 Node.js 24、Docker Desktop、npm。請在專案目錄執行：
@@ -49,9 +51,10 @@ npm run dev
 - [架構與模組擴充契約](docs/architecture.md)
 - [來源、授權與資料邊界](docs/data-sources.md)
 - [美股、日股免費資料來源調研](docs/international-data-survey.md)
+- [urTube 影音模組](docs/media-module.md)
 - [AI 新聞摘要、儲存與費用試算](docs/ai-news.md)
 - [驗證紀錄](docs/verification.md)
 
-本機版本已通過 112 項測試、正式建置與真實資料管線驗證；完整範圍見[驗證紀錄](docs/verification.md)。公開部署需自行設定 Cloudflare 帳號、Access 邀請名單及本機 Tunnel；程式庫不包含可共用的服務帳號或部署憑證。
+本機版本已通過 122 項測試、正式建置與真實資料管線驗證；完整範圍見[驗證紀錄](docs/verification.md)。公開部署需自行設定 Cloudflare 帳號、Access 邀請名單及本機 Tunnel；程式庫不包含可共用的服務帳號或部署憑證。
 
 `.env`、`wrangler.local.jsonc`、資料、執行紀錄與備份均排除於 Git。請另行保存備份密語；缺少密語便無法解密。共享此站給親友時，依部署文件啟用正式登入。

@@ -17,11 +17,14 @@ import { supportsEtfHoldings } from './providers/etf-news';
 import { searchYahoo, YahooUnavailable } from './providers/yahoo';
 import { regionOf, exchangeDate, timeZoneOf } from '../shared/markets';
 import { createNewsAnalysisService } from './news-analysis';
+import { registerMediaRoutes } from './media/routes';
+import { MediaError } from './media/import';
+import { classifyMediaTitles } from './media/analysis';
 import { AnalysisError, summarizeNews } from './providers/openai-news';
 
 declare module 'fastify' { interface FastifyRequest { zhiyuUser: User; } }
 export interface JobQueue { send(name: string, data?: object, options?: object): Promise<unknown>; }
-interface AppOptions { pool: Pool; config: Config; queue?: JobQueue; verifyIdentity?: (request: FastifyRequest) => Promise<Identity>; logger?: boolean; yahooSearch?: typeof searchYahoo; newsSummarizer?: typeof summarizeNews; }
+interface AppOptions { pool: Pool; config: Config; queue?: JobQueue; verifyIdentity?: (request: FastifyRequest) => Promise<Identity>; logger?: boolean; yahooSearch?: typeof searchYahoo; newsSummarizer?: typeof summarizeNews; mediaClassifier?:typeof classifyMediaTitles; }
 const dateOnly = (v: string | Date) => typeof v === 'string' ? v.slice(0, 10) : v.toISOString().slice(0, 10);
 const iso = (v: Date | string | null) => v ? new Date(v).toISOString() : null;
 export function mapSecurity(row: Record<string, any>): Security {
@@ -33,7 +36,7 @@ function missingFundamentals(security: Security): Fundamentals {
   return { securityId: security.id, asOf: '', revenuePeriod: null, earningsPeriod: null, basis: 'cumulative', revenue: null, revenueYoy: null, eps: null, grossMargin: null, operatingMargin: null, unit: '新台幣千元；EPS 為元', sourceUrl: security.sourceUrl, availability: security.assetType === 'etf' ? 'not_applicable' : /金融|保險|銀行|證券/.test(security.sector || '') ? 'unsupported' : 'missing' };
 }
 const watchSchema = z.object({ held: z.boolean(), interested: z.boolean(), group: z.string().trim().min(1).max(40).default('我的清單') }).strict();
-const moduleSchema = z.object({ enabled: z.boolean(), configVersion: z.literal(1), config: z.object({ translationTarget: z.enum(['zh-TW','en','ja']).optional() }).strict().default({}), widgets: z.array(z.enum(financeModule.widgets.map(w => w.id) as [string, ...string[]])).max(5).refine(v => new Set(v).size === v.length, '卡片不能重複') }).strict();
+const moduleSchema = (definition: typeof financeModule) => z.object({ enabled: z.boolean(), configVersion: z.literal(1), config: z.object({ translationTarget: z.enum(['zh-TW','en','ja']).optional() }).strict().default({}), widgets: z.array(z.enum(definition.widgets.map(w => w.id) as [string, ...string[]])).max(5).refine(v => new Set(v).size === v.length, '卡片不能重複') }).strict();
 function taipeiToday() { return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
 export function historyWindow(today: string, range: '1m' | '3m' | '1y' | '3y' | '5y' | '10y' | '20y') {
   const monthsBack = { '1m': 1, '3m': 3, '1y': 12, '3y':36, '5y':60, '10y':120, '20y':240 }[range];
@@ -46,7 +49,7 @@ export function historyWindow(today: string, range: '1m' | '3m' | '1y' | '3y' | 
   return { requestedFrom: from.toISOString().slice(0, 10), months };
 }
 
-export async function buildApp({ pool, config, queue, verifyIdentity = createIdentityVerifier(config), logger = true, yahooSearch = searchYahoo, newsSummarizer = summarizeNews }: AppOptions) {
+export async function buildApp({ pool, config, queue, verifyIdentity = createIdentityVerifier(config), logger = true, yahooSearch = searchYahoo, newsSummarizer = summarizeNews, mediaClassifier = classifyMediaTitles }: AppOptions) {
   const aiNews = createNewsAnalysisService(pool, config, newsSummarizer);
   const app = Fastify({ logger: logger ? { level: 'info', redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["cf-access-jwt-assertion"]', 'res.headers["set-cookie"]'] } : false, disableRequestLogging: true, bodyLimit: 16384, trustProxy: false });
   await app.register(helmet, { contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'self'"], formAction: ["'self'"] } } });
@@ -55,6 +58,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     if (error instanceof z.ZodError) return reply.code(400).send({ error: '輸入格式不正確，請檢查欄位。' });
     if (error instanceof AccessError) return reply.code(error.statusCode).send({ error: error.message });
     if (error instanceof YahooUnavailable) return reply.code(424).send({ error: error.message });
+    if (error instanceof MediaError) return reply.code(error.statusCode).send({ error: error.message });
     if (error instanceof AnalysisError) return reply.code(error.statusCode).send({ error: error.message });
     const status = (error as {statusCode?: number}).statusCode;
     if (status && status >= 400 && status < 500) return reply.code(status).send({ error: status === 429 ? '操作太頻繁，請稍後再試。' : '無法處理此請求。' });
@@ -75,7 +79,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
       const origin = request.headers.origin;
       const allowedOrigins = config.mode === 'development' ? [config.publicOrigin, 'http://127.0.0.1:3001', 'http://localhost:5173'] : [config.publicOrigin];
       if ((origin && !allowedOrigins.includes(origin)) || (!origin && config.mode === 'production')) throw new AccessError(403, '此操作必須從知隅網站發起。');
-      if (!String(request.headers['content-type'] || '').startsWith('application/json')) throw new AccessError(415, '請使用 JSON 格式。');
+      if (!(routePath === '/api/v1/media/import' && String(request.headers['content-type']).startsWith('application/octet-stream')) && !String(request.headers['content-type'] || '').startsWith('application/json')) throw new AccessError(415, '請使用 JSON 格式。');
     }
     if (routePath === '/api/health') return;
     const identity = await verifyIdentity(request);
@@ -83,8 +87,10 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     const row = result.rows[0];
     if (row.disabled) throw new AccessError(403, '帳號已停用。');
     request.zhiyuUser = { id: row.id, email: row.email, displayName: row.display_name, role: row.role };
-    const initial = defaultModuleState();
+    for (const definition of modules) {
+    const initial = defaultModuleState(definition.id);
     await pool.query('INSERT INTO user_modules(user_id,module_id,enabled,config_version,config,widgets) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING', [row.id, initial.moduleId, initial.enabled, initial.configVersion, initial.config, JSON.stringify(initial.widgets)]);
+    }
   });
   await app.register(rateLimit, { max: 180, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: request => request.zhiyuUser?.id || request.ip });
 
@@ -117,11 +123,12 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
   });
   app.get('/api/v1/modules', async request => ({ modules, states: await getStates(request.zhiyuUser.id) }));
   app.put<{ Params: { id: string } }>('/api/v1/modules/:id', async request => {
-    if (request.params.id !== 'finance') throw new AccessError(404, '找不到這個模組。');
-    const input = moduleSchema.parse(request.body);
+    const definition=modules.find(item=>item.id===request.params.id);
+    if (!definition) throw new AccessError(404, '找不到這個模組。');
+    const input = moduleSchema(definition).parse(request.body);
     const previous = await pool.query('SELECT enabled FROM user_modules WHERE user_id=$1 AND module_id=$2', [request.zhiyuUser.id, request.params.id]);
     const result = await pool.query('UPDATE user_modules SET enabled=$3,config_version=$4,config=$5,widgets=$6 WHERE user_id=$1 AND module_id=$2 RETURNING *', [request.zhiyuUser.id, request.params.id, input.enabled, input.configVersion, input.config, JSON.stringify(input.widgets)]);
-    if (input.enabled && !previous.rows[0]?.enabled && queue) {
+    if (definition.id==='finance' && input.enabled && !previous.rows[0]?.enabled && queue) {
       try { await enqueue('digest.generate'); } catch { /* Persistent scheduler catch-up retries after recovery. */ }
     }
     return moduleState(result.rows[0]);
@@ -250,6 +257,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
       await client.query('SELECT 1 FROM user_modules WHERE user_id=$1 FOR UPDATE', [request.zhiyuUser.id]);
       await client.query('DELETE FROM watchlist WHERE user_id=$1', [request.zhiyuUser.id]);
       await client.query('DELETE FROM digests WHERE user_id=$1', [request.zhiyuUser.id]);
+      for(const table of ['media_events','media_imports','media_classifications','media_ai_state']) await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);
       await client.query("UPDATE user_modules SET enabled=false,config='{}',widgets='[]',config_version=1 WHERE user_id=$1", [request.zhiyuUser.id]);
       await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -260,6 +268,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     await enqueue('digest.generate');
     return { queued: true };
   });
+  registerMediaRoutes(app,pool,config,mediaClassifier);
   if (existsSync(resolve('dist/index.html'))) {
     await app.register(fastifyStatic, { root: resolve('dist'), prefix: '/' });
     app.setNotFoundHandler((request, reply) => request.url.startsWith('/api/') ? reply.code(404).send({ error: '找不到這個 API。' }) : reply.type('text/html').sendFile('index.html'));

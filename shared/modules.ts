@@ -6,11 +6,18 @@ export const financeModule: ModuleDefinition = { id: 'finance', name: '財經', 
   { id: 'news', name: '新聞與公告', description: '閱讀相關新聞與公司公告，附上原始出處。' },
   { id: 'fundamentals', name: '公司基本面', description: '台股月營收、美日季度與年度財報，保留來源幣別及期間。' }
 ] };
-export const modules: ModuleDefinition[] = [financeModule];
-export function defaultModuleState(): ModuleState { return { moduleId: 'finance', enabled: true, configVersion: 1, config: {}, widgets: financeModule.widgets.map(w => w.id) }; }
+export const mediaModule: ModuleDefinition = {id:'media',name:'影音分析',description:'從 urTube 與 YouTube 觀看紀錄，回顧常看的頻道、主題與興趣變化。',version:'1.0.0',configVersion:1,icon:'video',routes:['/media'],jobs:[],widgets:[
+  {id:'overview',name:'觀看概況',description:'觀看次數、影片與有紀錄的觀看時間。'},
+  {id:'channels',name:'常看頻道',description:'比較不同時期常看的創作者。'},
+  {id:'topics',name:'興趣主題',description:'沿用 urTube 分類，按需補充 AI 分析。'},
+  {id:'history',name:'觀看紀錄',description:'搜尋自己的影片紀錄。'}
+]};
+export const modules: ModuleDefinition[] = [financeModule,mediaModule];
+export function defaultModuleState(moduleId = 'finance'): ModuleState { const module=modules.find(item=>item.id===moduleId);if(!module)throw new Error('Unknown module');return { moduleId, enabled: moduleId==='finance', configVersion: module.configVersion, config: {}, widgets: module.widgets.map(w => w.id) }; }
 export function migrateModuleState(state: ModuleState): ModuleState {
-  if (state.moduleId !== 'finance') throw new Error('Unknown module');
-  if (state.configVersion > financeModule.configVersion) throw new Error('Unsupported future module configuration');
-  const valid = new Set(financeModule.widgets.map(w => w.id));
-  return { ...state, configVersion: 1, config: state.config || {}, widgets: [...new Set((state.widgets || defaultModuleState().widgets).filter(w => valid.has(w)))] };
+  const module=modules.find(item=>item.id===state.moduleId);
+  if (!module) throw new Error('Unknown module');
+  if (state.configVersion > module.configVersion) throw new Error('Unsupported future module configuration');
+  const valid = new Set(module.widgets.map(w => w.id));
+  return { ...state, configVersion: module.configVersion, config: state.config || {}, widgets: [...new Set((state.widgets || defaultModuleState(state.moduleId).widgets).filter(w => valid.has(w)))] };
 }
