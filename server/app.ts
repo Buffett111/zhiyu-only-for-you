@@ -13,6 +13,7 @@ import type { Config } from './config';
 import { modules, defaultModuleState, migrateModuleState, financeModule } from '../shared/modules';
 import type { User, Security, ModuleState, SourceStatus, Quote, Fundamentals, Digest } from '../shared/types';
 import { enqueueHistory, historyYears } from './jobs';
+import { supportsEtfHoldings } from './providers/etf-news';
 import { searchYahoo, YahooUnavailable } from './providers/yahoo';
 import { regionOf, exchangeDate, timeZoneOf } from '../shared/markets';
 
@@ -177,8 +178,10 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     const [q, f, n] = await Promise.all([pool.query('SELECT data FROM quotes WHERE security_id=$1 ORDER BY date DESC LIMIT 1', [security.id]), pool.query('SELECT data FROM fundamentals WHERE security_id=$1', [security.id]), pool.query("SELECT data FROM news WHERE data->'securityIds' ? $1 ORDER BY published_at DESC LIMIT 30", [security.id])]);
     const reports = await pool.query('SELECT data FROM financial_reports WHERE security_id=$1 ORDER BY period_end DESC,basis', [security.id]);
     const progress = await pool.query('SELECT * FROM content_progress WHERE security_id=$1 ORDER BY kind', [security.id]);
+    const holding = security.assetType === 'etf' ? (await pool.query('SELECT data,error FROM etf_holdings WHERE security_id=$1',[security.id])).rows[0] : null;
     return { security, quote: q.rows[0]?.data || null, fundamentals: security.assetType === 'etf' ? missingFundamentals(security) : f.rows[0]?.data || missingFundamentals(security), news: n.rows.map(r => r.data),
-      financialReports: reports.rows.map(r => r.data), contentStatus: progress.rows.map(r => ({kind:r.kind,status:r.status,lastAttempt:iso(r.last_attempt),lastSuccess:iso(r.last_success),error:r.error})) };
+      financialReports: reports.rows.map(r => r.data), contentStatus: progress.rows.map(r => ({kind:r.kind,status:r.status,lastAttempt:iso(r.last_attempt),lastSuccess:iso(r.last_success),error:r.error})),
+      etfContext: security.assetType === 'etf' ? { supported:supportsEtfHoldings(security),asOf:holding?.data?.asOf ?? null,holdingsCount:holding?.data?.holdings.length ?? 0,sourceUrl:holding?.data?.sourceUrl ?? null,error:holding?.error ?? null,issuerAnnouncements:security.market==='TWSE' && ['0050','0056'].includes(security.symbol) } : undefined };
   });
   app.post<{ Params: { id: string } }>('/api/v1/finance/securities/:id/history/request', { preHandler: requireFinance }, async request => {
     const {years}=z.object({years:z.union([z.literal(5),z.literal(10),z.literal(20)])}).strict().parse(request.body);
@@ -207,9 +210,13 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     const attempted = progress.rows.some(r => ['complete', 'partial', 'error'].includes(r.status));
     return { quotes, coverage: { from: quotes[0]?.date || null, to: quotes.at(-1)?.date || null, requestedFrom, partial }, status: !quotes.length && !attempted ? 'pending' : partial ? 'partial' : 'ready' };
   });
-  app.get<{ Querystring: { securityId?: string; kind?: string } }>('/api/v1/finance/news', { preHandler: requireFinance }, async request => {
-    const input = z.object({ securityId: z.string().max(80).optional(), kind: z.enum(['news', 'announcement']).optional() }).parse(request.query);
-    const rows = await pool.query("SELECT n.data FROM news n WHERE ($1::text IS NULL OR n.data->'securityIds' ? $1) AND ($2::text IS NULL OR n.data->>'kind'=$2) AND ($1::text IS NOT NULL OR EXISTS (SELECT 1 FROM watchlist w WHERE w.user_id=$3 AND n.data->'securityIds' ? w.security_id)) ORDER BY n.published_at DESC LIMIT 100", [input.securityId || null, input.kind || null, request.zhiyuUser.id]);
+  app.get<{ Querystring: { securityId?: string; kind?: string; scope?: string } }>('/api/v1/finance/news', { preHandler: requireFinance }, async request => {
+    const input = z.object({ securityId: z.string().max(80).optional(), kind: z.enum(['news', 'announcement']).optional(),scope:z.enum(['all','direct','constituent','market']).default('all') }).parse(request.query);
+    const rows = await pool.query(`SELECT n.data FROM news n WHERE ($1::text IS NULL OR n.data->'securityIds' ? $1) AND ($2::text IS NULL OR n.data->>'kind'=$2)
+      AND ($1::text IS NOT NULL OR EXISTS (SELECT 1 FROM watchlist w WHERE w.user_id=$3 AND n.data->'securityIds' ? w.security_id))
+      AND ($4='all' OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(n.data->'relations','[]'::jsonb)) r WHERE r->>'securityId'=$1 AND r->>'kind'=$4)
+        OR ($4='direct' AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(n.data->'relations','[]'::jsonb)) r WHERE r->>'securityId'=$1)))
+      ORDER BY n.published_at DESC LIMIT 100`, [input.securityId || null, input.kind || null, request.zhiyuUser.id,input.scope]);
     return rows.rows.map(r => r.data);
   });
   app.get('/api/v1/finance/digests', { preHandler: requireFinance }, async request => (await pool.query('SELECT * FROM digests WHERE user_id=$1 ORDER BY date DESC LIMIT 30', [request.zhiyuUser.id])).rows.map(digest));

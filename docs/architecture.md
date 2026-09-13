@@ -67,3 +67,9 @@ Access JWT 驗证 issuer、audience、RS256 簽章、有效期與 email 邀請�
 `POST /api/v1/finance/securities/:id/history/request` 接受 JSON `{"years":20}`（允許 5、10、20）。使用者須通過登入、啟用財經模組，且該股票存在自己的追蹤清單。請求目標持久保存、只擴大既有目標，排入去重佇列；重啟後沿用，同股票的公開市場資料共用。此端點不接受任意來源 URL。取得較早資料後可用 `range=20y` 查詢，來源缺項不承諾補齊。
 
 前端新增三、五、十年切換，預設十年；設定版本仍為 1，不重置既有模組卡片與私人清單。股票日線與財報的可取得期間分開顯示，十年股價不代表有十年財報。
+
+## ETF 關聯消息（1.4.0）
+
+005 遷移新增 `etf_holdings`，保存按需取得的官方持股快照與最後嘗試／成功時間。既有新聞排程展開成分股目錄，只用於新聞與公司公告配對，不改私人清單及行情排程。持股成功後每天檢查，失敗每小時重試，舊快照仍可查看。
+
+NewsItem 新增可選 `relations`，按 ETF 記錄 direct／constituent／market，成分股關聯另帶公司名稱、持股日期及來源。跨使用者共用文章保留既有關聯；舊新聞未帶 relations 仍相容。`GET /api/v1/finance/news` 新增可選 `scope=all|direct|constituent|market`，在查詢上限之前篩選，省略維持原本全部結果；無 securityId 時仍限定本人追蹤聯集。單檔回應新增可選 etfContext，揭露持股与基金公告接入範圍。設定版本維持 1，模組升級不重置卡片與清單。

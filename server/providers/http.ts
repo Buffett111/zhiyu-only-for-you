@@ -1,5 +1,8 @@
 /** Only the official, reviewed feeds below can be contacted. Never accepts a user URL. */
 const ALLOWED_PATHS: Record<string, RegExp> = {
+  'www.yuantaetfs.com': /^\/(?:product\/detail\/(?:0050|0056)\/ratio|news\/announcement)$/,
+  'websys.fsit.com.tw': /^\/FubonETF\/Trade\/Assets\.aspx$/,
+  'news.google.com': /^\/rss\/search$/,
   'finance.yahoo.co.jp': /^\/quote\/[A-Z0-9]{4}\.T\/news$/,
   'openapi.twse.com.tw': /^\/v1\/(?:exchangeReport\/STOCK_DAY_ALL|opendata\/t187ap(?:03_L|04_L|05_L|06_L_ci|47_L)|holidaySchedule\/holidaySchedule)$/,
   'www.tpex.org.tw': /^\/(?:openapi\/v1\/(?:tpex_mainboard_daily_close_quotes|mopsfin_t187ap(?:03_O|04_O|05_O|06_O_ci))|www\/zh-tw\/afterTrading\/tradingStock)$/,

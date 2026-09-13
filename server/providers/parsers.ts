@@ -162,10 +162,10 @@ export function parseFundamental(security: Security, revenue: Row | undefined, e
 // Common words / group names are deliberately not aliases. 長榮 does not establish either airline or shipping.
 const AMBIGUOUS_NAMES = new Set(['長榮', '長榮航', '統一', '中華', '世界', '聯合', '大眾', '大同', '新光', '國泰', '富邦', '中信', '永豐', '台灣', '臺灣']);
 export function matchSecurities(title: string, securities: Security[]): string[] {
-  const normalized = title.normalize('NFKC');
+  const normalized = title.normalize('NFKC').replace(/臺/g, '台');
   const ownership = new Map<string, Set<string>>();
-  for (const security of securities) for (const alias of security.aliases) {
-    const name = alias.normalize('NFKC').trim();
+  for (const security of securities) for (const alias of [...security.aliases, security.name, security.symbol]) {
+    const name = alias.normalize('NFKC').replace(/臺/g, '台').trim();
     if (name.length < 2 || AMBIGUOUS_NAMES.has(name)) continue;
     const owners = ownership.get(name) ?? new Set<string>(); owners.add(security.id); ownership.set(name, owners);
   }

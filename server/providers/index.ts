@@ -1,6 +1,7 @@
 import type { Fundamentals, TaiwanMarket as Market, MarketSnapshot, NewsItem, ProviderResult, Quote, Security } from '../../shared/types.js';
 export { fetchInternationalHistory } from './yahoo.js';
 export { fetchInternationalFinancials, fetchInternationalNews } from './international-content.js';
+export { fetchEtfHoldings, fetchEtfAnnouncements, fetchRelatedNews } from './etf-news';
 import { officialJson, officialText } from './http.js';
 import { enrichSecurities, field, financialApplicability, parseAnnouncements, parseCnaRss, parseDate, parseFundamental, parseHistory, parseIsin, parseQuote, rows, stripHtml, symbolOf, text, type Row } from './parsers.js';
 

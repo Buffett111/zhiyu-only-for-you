@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import type { FinancialReport, NewsItem, ProviderResult, Security } from '../shared/types';
 import { regionOf } from '../shared/markets';
+import { mergeNews } from './providers/etf-news';
 
 export interface ContentProviders {
  fetchInternationalFinancials?(security: Security, now?: Date): Promise<ProviderResult<FinancialReport>>;
@@ -48,7 +49,7 @@ export function createContentJobs(pool: Pool, providers: ContentProviders) {
          if (!item.securityIds.includes(security.id)) continue;
          // Merge public source associations when two tracked companies share a headline.
          const old = (await client.query('SELECT data FROM news WHERE id=$1', [item.id])).rows[0]?.data as NewsItem | undefined;
-         const merged = { ...item, securityIds: [...new Set([...(old?.securityIds ?? []), security.id])] };
+         const merged = mergeNews(old, item);
          await client.query(`INSERT INTO news(id,published_at,data) VALUES($1,$2,$3::jsonb) ON CONFLICT(id) DO UPDATE SET published_at=$2,data=$3::jsonb`, [item.id,item.publishedAt,JSON.stringify(merged)]);
         }
        }
@@ -82,5 +83,5 @@ export function createContentJobs(pool: Pool, providers: ContentProviders) {
 /** Trim news caches; historical prices and financial statements are long-term archives. */
 export async function pruneMarketCache(pool: Pool, now = new Date()): Promise<void> {
  // Untracking stops fetching. It does not discard compact price/financial history.
- await pool.query(`DELETE FROM news WHERE published_at < $1 OR id NOT IN (SELECT id FROM news ORDER BY published_at DESC,id LIMIT 5000)`, [new Date(now.getTime()-90*86400000)]);
+ await pool.query(`DELETE FROM news WHERE published_at < $1 OR (data->>'source' LIKE '%（Google News）' AND data->>'title' ~* '股市爆料同學會|\\m(Dcard|PTT|Reddit)\\M') OR id NOT IN (SELECT id FROM news ORDER BY published_at DESC,id LIMIT 5000)`, [new Date(now.getTime()-90*86400000)]);
 }

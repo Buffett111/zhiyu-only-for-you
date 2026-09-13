@@ -192,6 +192,17 @@ describe.skipIf(!testUrl)('PostgreSQL persistence, deduplication and restart rec
     await createJobHandlers(pool, { ...providers, fetchNews: async () => ({ items: [{ ...news, securityIds: [], matchType: 'market' }], warnings: [] }) }).syncNews(instant);
     expect((await pool.query('SELECT data FROM news WHERE id=$1', [news.id])).rows[0].data).toMatchObject({ securityIds: [company.id], matchType: 'exact' });
   });
+  it('expands ETF news using cached holdings without tracking or downloading constituent prices', async () => {
+    await pool.query('INSERT INTO watchlist(user_id,security_id) VALUES($1,$2)',[userA,security.id]);
+    const holdings = vi.fn(async()=>({securityId:security.id,asOf:'2026-09-11',sourceUrl:'https://www.yuantaetfs.com/product/detail/0050/ratio',aliases:['元大台灣50'],holdings:[{symbol:company.symbol,name:company.name,weight:57}]}));
+    const newsProvider = vi.fn(async()=>({items:[news],warnings:[]}));
+    const handlers=createJobHandlers(pool,{...providers,fetchEtfHoldings:holdings,fetchNews:newsProvider});
+    await handlers.syncNews(instant);await handlers.syncNews(new Date(instant.getTime()+3600000));
+    expect(holdings).toHaveBeenCalledTimes(1);expect(newsProvider.mock.calls).toHaveLength(2);
+    expect((await pool.query('SELECT data FROM news WHERE id=$1',[news.id])).rows[0].data.relations[0]).toMatchObject({securityId:security.id,kind:'constituent'});
+    expect((await pool.query('SELECT security_id FROM watchlist')).rows.map(r=>r.security_id)).toEqual([security.id]);
+    expect((await pool.query('SELECT count(*) FROM quotes')).rows[0].count).toBe('0');
+  });
   it('coalesces per-month history jobs and retains one follow-up digest while the first is active', async () => {
     const boss = new PgBoss({ connectionString: testUrl, schema, schedule: false, supervise: false });
     try {

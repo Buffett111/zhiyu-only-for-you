@@ -5,12 +5,17 @@ import type { Digest, Fundamentals, FinancialReport, Market, TaiwanMarket, Marke
 import { internationalSessionDate, regionOf } from '../shared/markets.js';
 import * as upstream from './providers/index.js';
 import { createContentJobs, type ContentProviders } from './content-jobs';
+import type { EtfHoldings } from '../shared/types';
+import { mergeNews, relateEtfNews, supportsEtfHoldings } from './providers/etf-news';
 
 export const QUEUES = ['market.sync', 'international.sync', 'news.sync', 'history.backfill', 'digest.generate', 'fundamentals.sync'] as const;
 export const GLOBAL_JOB_KEY = 'global';
 export type QueueName = typeof QUEUES[number];
 export interface CalendarDay { date: string; name: string; closed: boolean; }
 export interface JobProviders extends ContentProviders {
+  fetchEtfHoldings?(security: Security): Promise<EtfHoldings>;
+  fetchEtfAnnouncements?(securities: Security[]): Promise<ProviderResult<NewsItem>>;
+  fetchRelatedNews?(securities: Security[], tracked: Security[]): Promise<ProviderResult<NewsItem>>;
   fetchMarketSnapshot(market: TaiwanMarket): Promise<MarketSnapshot>;
   fetchSecurityCatalog?(market: TaiwanMarket): Promise<Security[]>;
   fetchInternationalHistory?(security: Security, now?: Date, years?: number): Promise<ProviderResult<Quote>>;
@@ -162,11 +167,14 @@ export function buildDigest(input: DigestInput): Digest {
   }
   const seenNews = new Set<string>();
   for (const item of [...input.news].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))) {
-    if (seenNews.has(item.id) || item.matchType === 'market' || (item.datePrecision === 'day' ? item.publishedDate : taipeiParts(new Date(item.publishedAt)).date) !== input.date) continue;
+    if (seenNews.size >= 30) break;
+    if (seenNews.has(item.id) || item.matchType === 'market' && !item.relations?.some(r=>ids.has(r.securityId)) || (item.datePrecision === 'day' ? item.publishedDate : taipeiParts(new Date(item.publishedAt)).date) !== input.date) continue;
     const securityId = item.securityIds.find(id => ids.has(id));
     if (!securityId) continue;
     seenNews.add(item.id);
-    items.push({ securityId, title: `${item.kind === 'announcement' ? '公告' : item.matchType === 'provider' ? '來源關聯新聞' : '新聞'}｜${item.title}`, body: `${item.source} · ${item.datePrecision === 'day' ? item.publishedDate : item.publishedAt}${item.matchType === 'provider' ? '（由來源關聯至此標的，非公司公告）' : ''}`, url: item.url });
+    const relation = item.relations?.find(r=>r.securityId===securityId);
+    const label = relation?.kind==='constituent' ? (item.kind==='announcement' ? '成分股公司公告' : '成分股消息') : relation?.kind==='market' ? '市場背景' : item.kind==='announcement' ? (input.securities.find(s=>s.id===securityId)?.assetType==='etf' ? '基金公告' : '公告') : item.matchType==='provider' ? '來源關聯新聞' : '新聞';
+    items.push({ securityId, title: `${label}｜${item.title}`, body: `${item.source} · ${item.datePrecision === 'day' ? item.publishedDate : item.publishedAt}${relation?.via?.length ? ` · 涉及 ${relation.via.map(v=>v.name).join('、')}（依 ${relation.holdingsDate} 持股清單）` : ''}${item.matchType === 'provider' ? '（由來源關聯至此標的，非公司公告）' : ''}`, url: item.url });
   }
   for (const update of input.financialUpdates) {
     if (!ids.has(update.securityId) || update.availability !== 'available') continue;
@@ -295,19 +303,48 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
   async function syncNews(now = new Date()): Promise<JobOutcome> {
     const source = 'news';
     return await withLock(pool, source, async client => {
-      await beginSource(client, source, '中央社新聞與公司公告');
+      await beginSource(client, source, '台股與 ETF 新聞／公告');
       try {
         const tracked = (await trackedSecurities(client)).filter(security => regionOf(security.market) === 'TW');
-        const fetched = tracked.length ? await providers.fetchNews(tracked) : { items: [], warnings: [], dataDate: undefined };
-        const result = { ...fetched, items: fetched.items.filter(item => item.securityIds.some(id => tracked.some(security => security.id === id))) };
+        const warnings: string[] = [], snapshots: EtfHoldings[] = [];
+        const catalog = (await client.query("SELECT * FROM securities WHERE market IN ('TWSE','TPEx') AND active")).rows.map(securityRow);
+        if (providers.fetchEtfHoldings) for (const etf of tracked.filter(supportsEtfHoldings)) {
+          const old = (await client.query('SELECT * FROM etf_holdings WHERE security_id=$1', [etf.id])).rows[0];
+          let snapshot = old?.data as EtfHoldings | undefined;
+          if (!old || now.getTime() - new Date(old.last_attempt).getTime() >= (old.error ? 3600000 : 86400000)) {
+            try {
+              snapshot = await providers.fetchEtfHoldings(etf);
+              if (snapshot.securityId !== etf.id) throw new Error('持股標的不符');
+              await client.query(`INSERT INTO etf_holdings(security_id,data,last_attempt,last_success) VALUES($1,$2::jsonb,$3,$3)
+                ON CONFLICT(security_id) DO UPDATE SET data=$2,last_attempt=$3,last_success=$3,error=NULL`, [etf.id,JSON.stringify(snapshot),now]);
+            } catch (error) {
+              const message = safeError(error); warnings.push(etf.symbol + ' 持股清單：' + message);
+              await client.query(`INSERT INTO etf_holdings(security_id,last_attempt,error) VALUES($1,$2,$3)
+                ON CONFLICT(security_id) DO UPDATE SET last_attempt=$2,error=$3`, [etf.id,now,message]);
+            }
+          } else if (old.error) warnings.push(etf.symbol + ' 持股來源暫時不可用，沿用上次資料');
+          if (snapshot && Date.parse(snapshot.asOf) <= now.getTime() && now.getTime()-Date.parse(snapshot.asOf) <= 14*86400000) snapshots.push(snapshot);
+          else warnings.push(etf.symbol + ' 尚無近十四日官方持股清單，成分關聯暫停');
+        }
+        const ids = new Set(snapshots.flatMap(s => s.holdings.flatMap(h => catalog.filter(c => c.symbol===h.symbol && c.assetType==='stock').map(c => c.id))));
+        const universe = [...new Map([...tracked, ...catalog.filter(s => ids.has(s.id))].map(s => [s.id, {...s,aliases:[...s.aliases,...(snapshots.find(h=>h.securityId===s.id)?.aliases ?? [])]}])).values()];
+        const fetched = tracked.length ? await providers.fetchNews(universe) : {items:[],warnings:[],dataDate:undefined};
+        const extras: NewsItem[] = [];
+        if (tracked.length && providers.fetchRelatedNews) {
+          try { const result = await providers.fetchRelatedNews(universe,tracked); extras.push(...result.items); warnings.push(...result.warnings); }
+          catch (error) { warnings.push('延伸新聞：' + safeError(error)); }
+        }
+        if (tracked.length && providers.fetchEtfAnnouncements) {
+          try { const result = await providers.fetchEtfAnnouncements(universe.filter(s=>tracked.some(t=>t.id===s.id))); extras.push(...result.items); warnings.push(...result.warnings); }
+          catch (error) { warnings.push('基金公告：' + safeError(error)); }
+        }
+        const activeIds = new Set((await trackedSecurities(client)).map(s=>s.id));
+        const mapped = [...fetched.items,...extras].map(item => relateEtfNews(item,tracked,snapshots,catalog));
+        const result = {...fetched, warnings:[...fetched.warnings,...warnings], items:[...new Map(mapped.filter(item=>item.securityIds.some(id=>activeIds.has(id))).map(item=>[item.id,item])).values()]};
         await transaction(client, async () => {
           for (const item of result.items) {
-            await client.query(`INSERT INTO news(id,data,published_at) VALUES($1,$2::jsonb,$3)
-              ON CONFLICT(id) DO UPDATE SET data=jsonb_set(
-                EXCLUDED.data || jsonb_build_object('matchType', CASE WHEN news.data->>'matchType'='exact' OR EXCLUDED.data->>'matchType'='exact' THEN 'exact' ELSE 'market' END),
-                '{securityIds}', (SELECT COALESCE(jsonb_agg(DISTINCT value),'[]'::jsonb)
-                  FROM jsonb_array_elements(COALESCE(news.data->'securityIds','[]'::jsonb) || COALESCE(EXCLUDED.data->'securityIds','[]'::jsonb)) AS related(value))),
-                published_at=$3`, [item.id, JSON.stringify(item), item.publishedAt]);
+            const old = (await client.query('SELECT data FROM news WHERE id=$1',[item.id])).rows[0]?.data;
+            await client.query('INSERT INTO news(id,data,published_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(id) DO UPDATE SET data=$2,published_at=$3', [item.id,JSON.stringify(mergeNews(old,item)),item.publishedAt]);
           }
         });
         const outcome: JobOutcome = { source, status: result.warnings.length ? 'partial' : 'success', count: result.items.length, warnings: result.warnings };
