@@ -12,7 +12,7 @@
     "dev:web": "vite --host 127.0.0.1",
     "worker": "tsx --use-system-ca --env-file-if-exists=.env server/worker.ts",
     "db:migrate": "tsx --env-file-if-exists=.env server/migrate.ts",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && npm run extension:build && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "start": "tsx --use-system-ca --env-file-if-exists=.env server/main.ts",
@@ -23,7 +23,8 @@
     "db:restore": "tsx --env-file-if-exists=.env scripts/restore.ts",
     "setup": "tsx scripts/setup.ts",
     "cf:prepare": "tsx --env-file-if-exists=.env scripts/prepare-cloudflare.ts",
-    "sources:verify": "tsx --use-system-ca scripts/verify-sources.ts"
+    "sources:verify": "tsx --use-system-ca scripts/verify-sources.ts",
+    "extension:build": "tsx --env-file-if-exists=.env scripts/build-extension.ts"
   },
   "dependencies": {
     "@fastify/helmet": "^13.1.1",
@@ -46,12 +47,14 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.20.2",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
+    "jsdom": "^29.1.1",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",

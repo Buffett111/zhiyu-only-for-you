@@ -257,7 +257,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
       await client.query('SELECT 1 FROM user_modules WHERE user_id=$1 FOR UPDATE', [request.zhiyuUser.id]);
       await client.query('DELETE FROM watchlist WHERE user_id=$1', [request.zhiyuUser.id]);
       await client.query('DELETE FROM digests WHERE user_id=$1', [request.zhiyuUser.id]);
-      for(const table of ['media_events','media_imports','media_classifications','media_ai_state']) await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);
+      for(const table of ['media_events','media_imports','media_classifications','media_ai_state','media_devices']) await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);
       await client.query("UPDATE user_modules SET enabled=false,config='{}',widgets='[]',config_version=1 WHERE user_id=$1", [request.zhiyuUser.id]);
       await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }

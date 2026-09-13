@@ -2,7 +2,7 @@
 
 ## urTube
 
-`server/media/takeout.ts` adapts timestamp and watch-history parsers from [skyhong2002/urtube.observe.tw](https://github.com/skyhong2002/urtube.observe.tw). The personal module also interoperates with its portable-export v1 format. Social matching, shared production data and credentials are not included.
+`server/media/takeout.ts` and `extension/history-dom.js` adapt timestamp, watch-history and YouTube DOM parsers from [skyhong2002/urtube.observe.tw](https://github.com/skyhong2002/urtube.observe.tw). The personal module also interoperates with its portable-export v1 format. Social matching, shared production data and credentials are not included.
 
 MIT License
 

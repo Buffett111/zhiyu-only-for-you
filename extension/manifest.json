@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "知隅 YouTube Capture",
+  "version": "1.0.0",
+  "description": "經授權後，自動將 YouTube 瀏覽與觀看紀錄同步至你的私人知隅帳號。",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "storage",
+    "alarms",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://zhiyu.example.invalid/*"
+  ],
+  "optional_host_permissions": [
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "知隅 YouTube Capture",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://zhiyu.example.invalid/extension-sync.html*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -6,7 +6,9 @@ import type { Config } from '../config';
 import { MAX_MEDIA_BYTES, MediaError } from './import';
 import { importMedia, mapMediaEvent, MEDIA_RANGES, mediaSummary } from './service';
 import { analyzeMedia, classifyMediaTitles } from './analysis';
+import { registerMediaDevices } from './devices';
 export function registerMediaRoutes(app:FastifyInstance,pool:Pool,config:Config,classify=classifyMediaTitles){
+  registerMediaDevices(app,pool);
   const enabled=async(request:FastifyRequest)=>{if(!(await pool.query("SELECT 1 FROM user_modules WHERE user_id=$1 AND module_id='media' AND enabled",[request.zhiyuUser.id])).rowCount)throw new MediaError('請先啟用影音分析模組。',409);};
   app.addContentTypeParser('application/octet-stream',{parseAs:'buffer',bodyLimit:MAX_MEDIA_BYTES},(_request,body,done)=>done(null,body));
   app.post('/api/v1/media/import',{preHandler:enabled,bodyLimit:MAX_MEDIA_BYTES,config:{rateLimit:{max:3,timeWindow:'1 minute'}}},async request=>{
@@ -29,7 +31,7 @@ export function registerMediaRoutes(app:FastifyInstance,pool:Pool,config:Config,
   });
   app.post('/api/v1/media/clear',async request=>{
     z.object({confirm:z.literal(true)}).strict().parse(request.body);
-    const client=await pool.connect();try{await client.query('BEGIN');await client.query("SELECT 1 FROM user_modules WHERE user_id=$1 AND module_id='media' FOR UPDATE",[request.zhiyuUser.id]);for(const table of ['media_events','media_imports','media_classifications','media_ai_state'])await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);await client.query('COMMIT');return {deleted:true};}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+    const client=await pool.connect();try{await client.query('BEGIN');await client.query("SELECT 1 FROM user_modules WHERE user_id=$1 AND module_id='media' FOR UPDATE",[request.zhiyuUser.id]);for(const table of ['media_events','media_imports','media_classifications','media_ai_state','media_devices'])await client.query(`DELETE FROM ${table} WHERE user_id=$1`,[request.zhiyuUser.id]);await client.query('COMMIT');return {deleted:true};}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
   });
   app.get('/api/v1/media/export',async(request,reply)=>{
     const userId=request.zhiyuUser.id;

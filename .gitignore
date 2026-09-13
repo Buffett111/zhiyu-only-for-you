@@ -50,3 +50,6 @@ logs/
 !.vscode/settings.example.json
 .DS_Store
 Thumbs.db
+
+# Generated browser extension bundles (contain no credentials).
+public/downloads/

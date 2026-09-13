@@ -7,17 +7,19 @@ export async function lockMedia(client:PoolClient,userId:string){
   const module=(await client.query("SELECT enabled FROM user_modules WHERE user_id=$1 AND module_id='media' FOR UPDATE",[userId])).rows[0];
   if(!module?.enabled)throw new MediaError('請先啟用影音分析模組。',409);
 }
-export async function importMedia(pool:Pool,userId:string,bytes:Uint8Array){
+export async function importMedia(pool:Pool,userId:string,bytes:Uint8Array,options:{guard?:(client:PoolClient)=>Promise<void>;source?:string;trackImport?:boolean}={}){
   const parsed=parseMediaImport(bytes),client=await pool.connect();
+  if(options.source){parsed.source=options.source;for(const event of parsed.events)event.source=options.source;}
   try{
     await client.query('BEGIN');await lockMedia(client,userId);
+    await options.guard?.(client);
     const previous=(await client.query('SELECT inserted,skipped FROM media_imports WHERE user_id=$1 AND hash=$2',[userId,parsed.hash])).rows[0];
     if(previous){await client.query('COMMIT');return {...previous,repeated:true,source:parsed.source};}
     const before=Number((await client.query('SELECT count(*) count FROM media_events WHERE user_id=$1',[userId])).rows[0].count);
     for(let offset=0;offset<parsed.events.length;offset+=2000){
       await client.query(`INSERT INTO media_events(user_id,event_id,video_id,title,channel,watched_at,actual_seconds,precision,topics,topic_source,source)
         SELECT $1,e->>'eventId',e->>'videoId',e->>'title',e->>'channel',(e->>'watchedAt')::timestamptz,(e->>'actualSeconds')::int,e->>'precision',e->'topics',e->>'topicSource',e->>'source' FROM jsonb_array_elements($2::jsonb) e
-        ON CONFLICT(user_id,event_id) DO UPDATE SET title=EXCLUDED.title,channel=COALESCE(EXCLUDED.channel,media_events.channel),actual_seconds=COALESCE(EXCLUDED.actual_seconds,media_events.actual_seconds),
+        ON CONFLICT(user_id,event_id) DO UPDATE SET title=EXCLUDED.title,channel=COALESCE(EXCLUDED.channel,media_events.channel),actual_seconds=GREATEST(EXCLUDED.actual_seconds,media_events.actual_seconds),
         topics=CASE WHEN jsonb_array_length(EXCLUDED.topics)>0 THEN EXCLUDED.topics ELSE media_events.topics END,topic_source=COALESCE(EXCLUDED.topic_source,media_events.topic_source)`,[userId,JSON.stringify(parsed.events.slice(offset,offset+2000))]);
     }
     // Classification belongs to a video; retain it when a day-only event is superseded.
@@ -32,7 +34,7 @@ export async function importMedia(pool:Pool,userId:string,bytes:Uint8Array){
     const after=Number((await client.query('SELECT count(*) count FROM media_events WHERE user_id=$1',[userId])).rows[0].count);
     if(after>500000)throw new MediaError('每個帳號最多保存 50 萬筆觀看紀錄。');
     const inserted=Math.max(0,after-before),skipped=parsed.skipped+Math.max(0,parsed.events.length-inserted);
-    await client.query('INSERT INTO media_imports(user_id,hash,source,inserted,skipped) VALUES($1,$2,$3,$4,$5)',[userId,parsed.hash,parsed.source,inserted,skipped]);
+    if(options.trackImport!==false)await client.query('INSERT INTO media_imports(user_id,hash,source,inserted,skipped) VALUES($1,$2,$3,$4,$5)',[userId,parsed.hash,parsed.source,inserted,skipped]);
     await client.query('COMMIT');return {inserted,skipped,repeated:false,source:parsed.source};
   }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
 }
