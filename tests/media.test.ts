@@ -2,7 +2,8 @@ import 'dotenv/config';
 import { beforeAll, afterAll, describe, it, expect, vi } from 'vitest';
 import pg from 'pg';
 import { randomUUID } from 'node:crypto';
-import { zipSync,strToU8 } from 'fflate';
+import { zipSync,strToU8,unzipSync } from 'fflate';
+import { importMedia } from '../server/media/service';
 import { parseMediaImport } from '../server/media/import';
 import { classifyMediaTitles } from '../server/media/analysis';
 import { buildApp } from '../server/app';
@@ -98,6 +99,19 @@ describe('private media module on PostgreSQL',()=>{
   expect(parseMediaImport(Buffer.from(part1.body)).events).toHaveLength(5000);expect(parseMediaImport(Buffer.from(part2.body)).events).toHaveLength(1);
   expect((await app.inject({url:'/api/v1/media/export?part=0',headers})).statusCode).toBe(400);
   expect((await app.inject({url:'/api/v1/media/export?part=1',headers})).json().events).toEqual([]);
+ });
+
+ it('retains urTube topics when exact Takeout times supersede date-only records',async()=>{
+  const files=unzipSync(portable());files['data/activity-records.json']=strToU8(JSON.stringify([{id:'a',occurred_precision:'day'}]));
+  const coarse=zipSync(files);
+  const alice=(await app.inject({url:'/api/v1/me',headers})).json();
+  await importMedia(pool,alice.id,coarse);await importMedia(pool,alice.id,takeout);
+  const rows=(await app.inject({url:'/api/v1/media/history?range=all',headers})).json().items;
+  expect(rows).toHaveLength(2);expect(rows.find((e:any)=>e.videoId==='abcdefghijk')).toMatchObject({precision:'exact',topics:['知識'],actualSeconds:null});
+  await app.inject({method:'POST',url:'/api/v1/media/clear',headers,payload:{confirm:true}});
+  await importMedia(pool,alice.id,takeout);await importMedia(pool,alice.id,coarse);
+  const reversed=(await app.inject({url:'/api/v1/media/history?range=all',headers})).json().items;
+  expect(reversed).toHaveLength(2);expect(reversed.find((e:any)=>e.videoId==='abcdefghijk')).toMatchObject({precision:'exact',topics:['知識'],actualSeconds:null});
  });
 
 });

@@ -20,6 +20,12 @@ export async function importMedia(pool:Pool,userId:string,bytes:Uint8Array){
         ON CONFLICT(user_id,event_id) DO UPDATE SET title=EXCLUDED.title,channel=COALESCE(EXCLUDED.channel,media_events.channel),actual_seconds=COALESCE(EXCLUDED.actual_seconds,media_events.actual_seconds),
         topics=CASE WHEN jsonb_array_length(EXCLUDED.topics)>0 THEN EXCLUDED.topics ELSE media_events.topics END,topic_source=COALESCE(EXCLUDED.topic_source,media_events.topic_source)`,[userId,JSON.stringify(parsed.events.slice(offset,offset+2000))]);
     }
+    // Classification belongs to a video; retain it when a day-only event is superseded.
+    await client.query(`UPDATE media_events e SET topics=c.topics,topic_source=c.topic_source FROM (
+      SELECT DISTINCT ON(video_id) video_id,topics,topic_source FROM media_events
+      WHERE user_id=$1 AND video_id IS NOT NULL AND jsonb_array_length(topics)>0
+      ORDER BY video_id,watched_at DESC,event_id
+    ) c WHERE e.user_id=$1 AND e.video_id=c.video_id AND jsonb_array_length(e.topics)=0`,[userId]);
     // A day-only scan is superseded by an exact record of that video on the same Taipei day.
     await client.query(`DELETE FROM media_events coarse USING media_events exact WHERE coarse.user_id=$1 AND exact.user_id=coarse.user_id AND coarse.video_id=exact.video_id AND coarse.precision='day' AND exact.precision='exact' AND (coarse.watched_at AT TIME ZONE 'Asia/Taipei')::date=(exact.watched_at AT TIME ZONE 'Asia/Taipei')::date`,[userId]);
     await client.query(`UPDATE media_events e SET topics=c.topics,topic_source=c.model FROM media_classifications c WHERE e.user_id=$1 AND c.user_id=e.user_id AND c.video_id=e.video_id AND jsonb_array_length(e.topics)=0`,[userId]);

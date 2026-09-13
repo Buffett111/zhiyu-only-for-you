@@ -113,7 +113,7 @@ Worker 已完成部署；未登入存取 `/` 與 `/api/v1/bootstrap`，兩者皆
 
 ## 2026-09-13 urTube 整合
 
-- 完整 122 項測試通過；新增 Takeout JSON／HTML、urTube ZIP、主題沿用、重複匯入、帳號隔離及清除期間 AI 競爭情境。
+- 完整 123 項測試通過；新增 Takeout JSON／HTML、urTube ZIP、主題沿用、重複匯入、帳號隔離及清除期間 AI 競爭情境。
 - TypeScript 與正式 Vite 建置通過。
 - 68 筆合成觀看事件於獨立 PostgreSQL schema 驗證桌面與 390 × 844 手機版，未寫入正式帳號或呼叫付費 AI。
 - 實際個人觀看歷史須由使用者匯入，未宣稱已自動同步 urTube 擴充功能。
