@@ -79,12 +79,8 @@ export function createContentJobs(pool: Pool, providers: ContentProviders) {
  return { syncContent };
 }
 
-/** Trim transient public caches, preserving financial archives and tracked price history. */
+/** Trim news caches; historical prices and financial statements are long-term archives. */
 export async function pruneMarketCache(pool: Pool, now = new Date()): Promise<void> {
- const active = (await pool.query(`SELECT DISTINCT w.security_id FROM watchlist w JOIN users u ON u.id=w.user_id AND NOT u.disabled
-  JOIN user_modules m ON m.user_id=w.user_id AND m.module_id='finance' AND m.enabled`)).rows.map(row => row.security_id);
- const old = new Date(now.getTime()-30*86400000);
- await pool.query('DELETE FROM quotes WHERE NOT(security_id=ANY($1::text[])) AND fetched_at < $2', [active,old]);
- // Financial rows are compact long-term records; untracking stops fetching, not retention.
+ // Untracking stops fetching. It does not discard compact price/financial history.
  await pool.query(`DELETE FROM news WHERE published_at < $1 OR id NOT IN (SELECT id FROM news ORDER BY published_at DESC,id LIMIT 5000)`, [new Date(now.getTime()-90*86400000)]);
 }

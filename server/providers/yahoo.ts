@@ -144,10 +144,11 @@ export function normalizeYahooHistory(security: Security, data: ChartResultArray
   return { items, dataDate: items.at(-1)!.date, warnings: [...new Set(warnings)] };
 }
 
-export async function fetchInternationalHistory(security: Security, now = new Date()): Promise<ProviderResult<Quote>> {
+export async function fetchInternationalHistory(security: Security, now = new Date(), years = 10): Promise<ProviderResult<Quote>> {
+  if (![5,10,20].includes(years)) throw new Error('Unsupported history horizon');
   const symbol = yahooSymbol(security); assertYahooSymbol(symbol);
   // Refresh the entire requested window together; past split adjustments can change.
-  const from = new Date(now); from.setUTCFullYear(from.getUTCFullYear() - 1); from.setUTCDate(from.getUTCDate() - 7);
+  const from = new Date(now); from.setUTCFullYear(from.getUTCFullYear() - years); from.setUTCDate(from.getUTCDate() - 7);
   try { return normalizeYahooHistory(security, await client.chart(symbol, { period1: from, period2: now, interval: '1d', includePrePost: false, events: 'div|split', return: 'array' }), now); }
   catch (error) { throw error instanceof YahooUnavailable ? error : new YahooUnavailable('Yahoo 日線格式或連線異常，保留上次資料。'); }
 }

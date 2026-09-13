@@ -123,7 +123,7 @@ describe('on-demand content, saved preferences and bounded public cache',()=>{
   expect(Number((await pool.query('SELECT count(*) FROM financial_reports')).rows[0].count)).toBe(1);
   await pool.query("UPDATE financial_reports SET fetched_at='2024-01-01'");
   await pool.query('UPDATE user_modules SET enabled=false');await pruneMarketCache(pool,now);
-  expect(Number((await pool.query('SELECT count(*) FROM quotes')).rows[0].count)).toBe(0);
+  expect(Number((await pool.query('SELECT count(*) FROM quotes')).rows[0].count)).toBe(1);
   expect(Number((await pool.query('SELECT count(*) FROM financial_reports')).rows[0].count)).toBe(1);
   expect(Number((await pool.query('SELECT count(*) FROM watchlist')).rows[0].count)).toBe(1);
  });

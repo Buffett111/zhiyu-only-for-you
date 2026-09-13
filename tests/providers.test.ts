@@ -35,6 +35,7 @@ describe('authoritative security classification', () => {
     const html = `<table><tr><td colspan=7>股票</td></tr>${row('6488', '環球晶')}<tr><td colspan=7>ETF</td></tr>${row('00679B', '元大美債20年')}<tr><td colspan=7>ETN</td></tr>${row('020099', '某ETN')}<tr><td colspan=7>上櫃認購(售)權證</td></tr>${row('700001', '權證')}</table><font color='red'><center>掛牌日以正式公告為準</center></font>`;
     const result = parseIsin(html, 'TPEx', 'source');
     expect(result.map(item => [item.symbol, item.assetType])).toEqual([['6488', 'stock'], ['00679B', 'etf']]);
+    expect(result[0].listedAt).toBe('2020-01-01');
     expect(() => parseIsin('<html>Access denied</html>', 'TPEx', 'source')).toThrow();
     expect(() => parseIsin(html.replace('掛牌日以正式公告為準', ''), 'TPEx', 'source')).toThrow();
   });

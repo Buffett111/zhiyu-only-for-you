@@ -28,7 +28,7 @@ const calls: string[] = [], queued: string[] = [], errors: string[] = [], conten
 const providers: JobProviders = {
   fetchInternationalFinancials: async (security, now) => { contentCalls.push(`financials:${security.id}`); return fetchInternationalFinancials(security, now); },
   fetchInternationalNews: async (security, now) => { contentCalls.push(`news:${security.id}`); return fetchInternationalNews(security, now); },
-  fetchInternationalHistory: async (security, now) => { calls.push(security.id); return fetchInternationalHistory(security, now); },
+  fetchInternationalHistory: async (security, now, years) => { calls.push(security.id); return fetchInternationalHistory(security, now, years); },
   fetchMarketSnapshot: async () => { throw new Error('Unexpected Taiwan request'); },
   fetchHistory: async () => { throw new Error('Unexpected Taiwan request'); },
   fetchNews: async () => ({ items: [], warnings: [] }), fetchFundamentals: async () => ({ items: [], warnings: [] })
@@ -124,7 +124,10 @@ try {
     await page.screenshot({path:'.cache/qa-financial-history-desktop.png',fullPage:true});
     await page.locator('.security-cell').filter({ hasText: '1306' }).click();
     await expect(page.getByRole('heading', { name: '用適合 ETF 的方式觀察' })).toBeVisible();
-    await page.getByRole('button', { name: '1年', exact: true }).click();
+    await page.getByRole('button', { name: '5年', exact: true }).click();
+    await expect(page.locator('.chart-card')).toContainText('查詢區間：5 年');
+    await page.getByRole('button', { name: '10年', exact: true }).click();
+    await expect(page.locator('.chart-card')).toContainText('查詢區間：10 年');
     await expect(page.locator('.chart-card svg[role="img"]')).toBeVisible();
     await page.screenshot({ path: '.cache/qa-yahoo-desktop.png', fullPage: true });
     await markets.getByRole('button', { name: '美股', exact: true }).click();
@@ -139,6 +142,7 @@ try {
     mobile.on('pageerror', error => errors.push(error.message)); await mobile.goto(base);
     await expect(mobile.locator('.watchlist-table tbody tr')).toHaveCount(4);
     assert.ok(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await expect(mobile.locator('.chart-card')).toContainText('查詢區間：10 年');
     await expect(mobile.getByRole('combobox',{name:'翻譯目標語言'})).toHaveValue('en');
     await expect(mobile.locator('.fundamentals-card')).toContainText('USD 百萬');
     await mobile.locator('.report-history summary').click();

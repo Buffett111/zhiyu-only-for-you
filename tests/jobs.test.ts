@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { migrate } from '../server/db';
 import pg, { type Pool } from 'pg';
 import { PgBoss } from 'pg-boss';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,12 +48,17 @@ describe('Taipei schedules and restart catch-up', () => {
     const restart = new Date('2026-09-14T09:00:00Z');
     expect(catchupNeeded({ 'market.sync': morning, 'news.sync': restart.toISOString(), 'digest.generate': restart.toISOString() }, restart)).toEqual(['market.sync']);
   });
-  it('requests thirteen calendar months to cover a rolling year', () => {
+  it('requests 121 calendar months to cover a rolling decade', () => {
     const months = historyMonths(instant);
-    expect(months).toHaveLength(13);
+    expect(months).toHaveLength(121);
     expect(months[0]).toBe('2026-09');
-    expect(months.at(-1)).toBe('2025-09');
-    expect(new Set(months).size).toBe(13);
+    expect(months.at(-1)).toBe('2016-09');
+    expect(new Set(months).size).toBe(121);
+  });
+  it('does not queue months before an official listing date',async()=>{
+    const send=vi.fn().mockResolvedValue('job');await enqueueHistory({send},security.id,instant,10,'2023-04-20');
+    expect(send).toHaveBeenCalledTimes(42);
+    expect(send.mock.calls.at(-1)?.[1]).toEqual({securityId:security.id,month:'2023-04'});
   });
 });
 
@@ -111,8 +116,8 @@ describe.skipIf(!testUrl)('PostgreSQL persistence, deduplication and restart rec
   beforeAll(async () => {
     admin = new pg.Pool({ connectionString: testUrl });
     await admin.query(`CREATE SCHEMA "${schema}"`);
-    pool = new pg.Pool({ connectionString: testUrl, options: `-c search_path=${schema},public`, max: 8 });
-    await pool.query(await readFile(new URL('../server/migrations/001_initial.sql', import.meta.url), 'utf8'));
+    pool = new pg.Pool({ connectionString: testUrl, options: `-c search_path=${schema}`, max: 8 });
+    await migrate(pool);
   });
   afterAll(async () => {
     if (pool) await pool.end();
@@ -194,7 +199,7 @@ describe.skipIf(!testUrl)('PostgreSQL persistence, deduplication and restart rec
       await boss.createQueue('history.backfill', { policy: 'exclusive' });
       await enqueueHistory(boss, security.id, instant);
       await enqueueHistory(boss, security.id, instant);
-      expect((await boss.findJobs('history.backfill')).length).toBe(13);
+      expect((await boss.findJobs('history.backfill')).length).toBe(121);
       await boss.createQueue('digest.generate', { policy: 'stately' });
       const first = await boss.send('digest.generate', {}, { singletonKey: GLOBAL_JOB_KEY });
       expect(first).not.toBeNull();

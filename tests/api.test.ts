@@ -84,6 +84,9 @@ describe('real PostgreSQL API and user isolation', () => {
     expect(oneMonth.status).toBe('partial'); expect(oneMonth.coverage.partial).toBe(true);
     expect(historyWindow('2026-03-31', '1m')).toEqual({ requestedFrom: '2026-02-28', months: ['2026-02', '2026-03'] });
     expect(historyWindow('2024-02-29', '1y').requestedFrom).toBe('2023-02-28');
+    expect(historyWindow('2026-09-13','10y')).toMatchObject({requestedFrom:'2016-09-13'});
+    expect(historyWindow('2026-09-13','10y').months).toHaveLength(121);
+    expect(historyWindow('2024-02-29','5y').requestedFrom).toBe('2019-02-28');
   });
   it('exports safely and deletes only the authenticated user data', async () => {
     await app.inject({ method: 'PUT', url: '/api/v1/finance/watchlist/TPEx%3A6488', headers: headers('bob@example.org'), payload });

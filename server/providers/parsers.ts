@@ -63,7 +63,7 @@ export function parseIsin(html: string, market: Market, sourceUrl: string): Secu
     const correctMarket = market === 'TWSE' ? cells[3] === '上市' || (category === '創新板' && cells[3] === '上市臺灣創新板') : cells[3] === '上櫃';
     if (!first || !correctMarket) throw new Error(`${market} ISIN 商品列無法辨識代號或市場`);
     const symbol = first[1], name = first[2].trim();
-    securities.push({ id: `${market}:${symbol}`, symbol, name, market, assetType: category === 'ETF' ? 'etf' : 'stock', currency: 'TWD', sector: cells[4] || undefined, aliases: [name], sourceUrl, active: true });
+    securities.push({ id: `${market}:${symbol}`, symbol, name, market, assetType: category === 'ETF' ? 'etf' : 'stock', currency: 'TWD', sector: cells[4] || undefined, aliases: [name], sourceUrl, active: true, listedAt:parseDate(cells[2]) ?? undefined });
   }
   if (!securities.some(item => item.assetType === 'stock') || !securities.some(item => item.assetType === 'etf')) throw new Error(`${market} ISIN 清單未完整提供股票與 ETF 分類`);
   if (new Set(securities.map(item => item.id)).size !== securities.length) throw new Error(`${market} ISIN 清單含重複代號`);

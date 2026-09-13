@@ -1,7 +1,7 @@
 import { PgBoss } from 'pg-boss';
 import { loadConfig } from './config.js';
 import { createPool, migrate } from './db.js';
-import { catchupNeeded, createJobHandlers, enqueueHistory, GLOBAL_JOB_KEY, QUEUES, safeError, trackedSecurities, type JobOutcome, type QueueName } from './jobs.js';
+import { catchupNeeded, createJobHandlers, enqueueHistory, historyYears, GLOBAL_JOB_KEY, QUEUES, safeError, trackedSecurities, type JobOutcome, type QueueName } from './jobs.js';
 import { pruneMarketCache } from './content-jobs';
 
 const config = loadConfig();
@@ -23,7 +23,7 @@ function requireRetry(outcomes: JobOutcome[]) {
 }
 async function enqueueTrackedHistory() {
   if (!boss) return;
-  for (const security of await trackedSecurities(pool)) await enqueueHistory(boss, security.id);
+  for (const security of await trackedSecurities(pool)) await enqueueHistory(boss, security.id,new Date(),await historyYears(pool,security.id),security.listedAt);
 }
 async function digestPipeline() {
   // Save an honest partial digest even if one upstream is unavailable. A later retry updates the same row.

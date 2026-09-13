@@ -2,7 +2,7 @@
 import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { migrate } from '../server/db';
 import pg, { type Pool } from 'pg';
 import type { Digest } from '../shared/types.js';
 import { createJobHandlers, latestDigestDate, safeError, type JobOutcome, type JobProviders } from '../server/jobs.js';
@@ -55,7 +55,7 @@ try {
   // Exclude public from search_path so an absent fixture table cannot resolve to production data.
   pool = new pg.Pool({ connectionString, options: `-c search_path=${schema}`, max: 4, connectionTimeoutMillis: 5_000 });
   assert.equal((await pool.query('SELECT current_schema() AS name')).rows[0].name, schema);
-  await pool.query(await readFile(new URL('../server/migrations/001_initial.sql', import.meta.url), 'utf8'));
+  await migrate(pool);
   await pool.query(`INSERT INTO users(id,email,display_name) VALUES($1,'pipeline-a@example.invalid','Pipeline A'),($2,'pipeline-b@example.invalid','Pipeline B')`, [userA, userB]);
   await pool.query(`INSERT INTO user_modules(user_id,module_id,enabled) VALUES($1,'finance',true),($2,'finance',true)`, [userA, userB]);
   const jobs = createJobHandlers(pool, providers);

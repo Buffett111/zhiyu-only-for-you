@@ -13,7 +13,7 @@ export interface CalendarDay { date: string; name: string; closed: boolean; }
 export interface JobProviders extends ContentProviders {
   fetchMarketSnapshot(market: TaiwanMarket): Promise<MarketSnapshot>;
   fetchSecurityCatalog?(market: TaiwanMarket): Promise<Security[]>;
-  fetchInternationalHistory?(security: Security, now?: Date): Promise<ProviderResult<Quote>>;
+  fetchInternationalHistory?(security: Security, now?: Date, years?: number): Promise<ProviderResult<Quote>>;
   fetchFundamentals(securities: Security[]): Promise<ProviderResult<Fundamentals>>;
   fetchNews(securities: Security[]): Promise<ProviderResult<NewsItem>>;
   fetchHistory(security: Security, month: string): Promise<ProviderResult<Quote>>;
@@ -44,11 +44,14 @@ export function expectedSessionDate(now: Date, closedDates: ReadonlySet<string> 
   }
   throw new Error('休市日曆超出可判讀範圍');
 }
-export function historyMonths(now = new Date()): string[] {
+export function historyMonths(now = new Date(), years = 10): string[] {
+  if (![5,10,20].includes(years)) throw new Error('Unsupported history horizon');
   const { date } = taipeiParts(now);
   const start = new Date(`${date.slice(0, 7)}-01T00:00:00Z`);
-  // Include the current month and the same month one year earlier, to cover a full rolling year.
-  return Array.from({ length: 13 }, (_, index) => new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - index, 1)).toISOString().slice(0, 7));
+  return Array.from({ length: years * 12 + 1 }, (_, index) => new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - index, 1)).toISOString().slice(0, 7));
+}
+export async function historyYears(client: Queryable, securityId: string): Promise<number> {
+  return (await client.query('SELECT years FROM history_targets WHERE security_id=$1',[securityId])).rows[0]?.years ?? 10;
 }
 export function fundamentalFingerprint(value: Fundamentals): string {
   // asOf is an observation timestamp, not a financial change. Field order must be stable.
@@ -79,7 +82,7 @@ export function safeError(error: unknown): string {
 function securityRow(row: Record<string, unknown>): Security {
   return { id: String(row.id), symbol: String(row.symbol), name: String(row.name), market: row.market as Market,
     assetType: row.asset_type as Security['assetType'], currency: row.currency as Security['currency'], sector: row.sector as string | undefined,
-    aliases: row.aliases as string[], sourceUrl: String(row.source_url), active: Boolean(row.active) };
+    aliases: row.aliases as string[], sourceUrl: String(row.source_url), active: Boolean(row.active),listedAt:row.listed_at ? String(row.listed_at) : undefined };
 }
 export async function trackedSecurities(db: Queryable): Promise<Security[]> {
   const result = await db.query(`SELECT DISTINCT s.* FROM securities s JOIN watchlist w ON w.security_id=s.id
@@ -225,10 +228,10 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
           if (!catalogOnly && snapshot.dataDate < expected) warnings.push(`最新官方資料 ${snapshot.dataDate}，尚待 ${expected} 更新或休市確認`);
           await transaction(client, async () => {
             for (const security of snapshot.securities) {
-              await client.query(`INSERT INTO securities(id,symbol,name,market,asset_type,currency,sector,aliases,source_url,active)
-                VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10)
-                ON CONFLICT(id) DO UPDATE SET name=$3,asset_type=$5,sector=$7,aliases=$8::jsonb,source_url=$9,active=$10,updated_at=now()`,
-              [security.id, security.symbol, security.name, security.market, security.assetType, security.currency, security.sector ?? null, JSON.stringify(security.aliases), security.sourceUrl, security.active ?? true]);
+              await client.query(`INSERT INTO securities(id,symbol,name,market,asset_type,currency,sector,aliases,source_url,active,listed_at)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)
+                ON CONFLICT(id) DO UPDATE SET name=$3,asset_type=$5,sector=$7,aliases=$8::jsonb,source_url=$9,active=$10,listed_at=COALESCE($11,securities.listed_at),updated_at=now()`,
+              [security.id, security.symbol, security.name, security.market, security.assetType, security.currency, security.sector ?? null, JSON.stringify(security.aliases), security.sourceUrl, security.active ?? true,security.listedAt ?? null]);
             }
             // The provider returns the complete official ISIN catalog, not just today's traded symbols.
             await client.query('UPDATE securities SET active=false,updated_at=now() WHERE market=$1 AND active AND NOT(id=ANY($2::text[]))',
@@ -322,7 +325,8 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
     const tracked = (await trackedSecurities(pool)).filter(security => regionOf(security.market) === 'TW' && (!securityId || security.id === securityId));
     const outcomes: JobOutcome[] = [];
     for (const security of tracked) {
-      for (const requestedMonth of month ? [month] : historyMonths(now)) {
+      for (const requestedMonth of month ? [month] : historyMonths(now, await historyYears(pool,security.id))) {
+        if (security.listedAt && requestedMonth < security.listedAt.slice(0,7)) continue;
         const active = await pool.query(`SELECT 1 FROM watchlist w JOIN users u ON u.id=w.user_id AND NOT u.disabled
           JOIN user_modules m ON m.user_id=u.id AND m.module_id='finance' AND m.enabled WHERE w.security_id=$1 LIMIT 1`, [security.id]);
         if (!active.rows.length) break;
@@ -333,6 +337,7 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
           if (previous.rows[0]?.status === 'complete' && (requestedMonth !== taipeiParts(now).date.slice(0, 7) || taipeiParts(new Date(previous.rows[0].last_attempt)).date === taipeiParts(now).date)) {
             return { source, status: 'skipped' as const, count: 0, warnings: [] };
           }
+          if (previous.rows[0]?.status === 'partial' && now.getTime()-new Date(previous.rows[0].last_attempt).getTime()<7*86400000) return { source,status:'skipped' as const,count:0,warnings:[] };
           await client.query(`INSERT INTO history_progress(security_id,month,status,last_attempt) VALUES($1,$2,'pending',$3)
             ON CONFLICT(security_id,month) DO UPDATE SET status='pending',last_attempt=$3,error=NULL`, [security.id, requestedMonth, now]);
           try {
@@ -410,11 +415,13 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
         if (!selected.length) continue;
         const due: Security[] = [];
         for (const security of selected) {
+          const months = historyMonths(now,await historyYears(client,security.id));
+          const horizonAttempted = (await client.query('SELECT 1 FROM history_progress WHERE security_id=$1 AND month=$2',[security.id,months.at(-1)])).rowCount;
           const latest = await client.query('SELECT date,fetched_at FROM quotes WHERE security_id=$1 ORDER BY date DESC LIMIT 1', [security.id]);
           const progress = await client.query('SELECT last_attempt FROM history_progress WHERE security_id=$1 ORDER BY last_attempt DESC LIMIT 1', [security.id]);
           const attempt = progress.rows[0]?.last_attempt;
-          if (attempt && now.getTime() - new Date(attempt).getTime() < 3600_000) continue;
-          if (latest.rows[0]?.date >= internationalSessionDate(security.market, now) && now.getTime() - new Date(latest.rows[0].fetched_at).getTime() < 86400_000) continue;
+          if (horizonAttempted && attempt && now.getTime() - new Date(attempt).getTime() < 3600_000) continue;
+          if (horizonAttempted && latest.rows[0]?.date >= internationalSessionDate(security.market, now) && now.getTime() - new Date(latest.rows[0].fetched_at).getTime() < 86400_000) continue;
           due.push(security);
         }
         if (!due.length) { outcomes.push({ source, status: 'skipped', count: 0, warnings: [] }); continue; }
@@ -424,17 +431,21 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
           // Recheck enabled ownership before every actual source request.
           if (!(await trackedSecurities(client)).some(item => item.id === security.id)) continue;
           const month = taipeiParts(now).date.slice(0, 7);
+          const years = await historyYears(client,security.id);
+          const firstMonth = historyMonths(now,years).at(-1)!;
           await client.query(`INSERT INTO history_progress(security_id,month,status,last_attempt) VALUES($1,$2,'pending',$3)
             ON CONFLICT(security_id,month) DO UPDATE SET status='pending',last_attempt=$3,error=NULL`, [security.id, month, now]);
+          await client.query(`INSERT INTO history_progress(security_id,month,status,last_attempt) VALUES($1,$2,'pending',$3)
+            ON CONFLICT(security_id,month) DO UPDATE SET status='pending',last_attempt=$3,error=NULL`, [security.id,firstMonth,now]);
           try {
-            const result = await providers.fetchInternationalHistory!(security, now);
+            const result = await providers.fetchInternationalHistory!(security, now, years);
             if (!result.items.length || result.items.some(item => item.securityId !== security.id)) throw new Error('Yahoo 回傳資料與請求標的不一致。');
             await transaction(client, async () => {
               // Replace the whole window atomically so a newly applied split cannot mix price bases.
               const from = result.items[0].date, to = result.items.at(-1)!.date;
               await client.query('DELETE FROM quotes WHERE security_id=$1 AND date >= $2 AND date <= $3', [security.id, from, to]);
               for (const quote of result.items) await upsertQuote(client, quote, 'history');
-              for (const requestedMonth of historyMonths(now)) {
+              for (const requestedMonth of historyMonths(now,years)) {
                 const available = result.items.some(item => item.date.startsWith(requestedMonth));
                 await client.query(`INSERT INTO history_progress(security_id,month,status,last_attempt,error) VALUES($1,$2,$3,$4,$5)
                   ON CONFLICT(security_id,month) DO UPDATE SET status=$3,last_attempt=$4,error=$5`, [security.id, requestedMonth, available && !result.warnings.length ? 'complete' : 'partial', now, available ? null : '此月份無可取得資料']);
@@ -446,7 +457,7 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
           } catch (error) {
             const message = safeError(error);
             warnings.push(message);
-            await client.query("UPDATE history_progress SET status='error',error=$3 WHERE security_id=$1 AND month=$2", [security.id, month, message]);
+            await client.query("UPDATE history_progress SET status='error',error=$3 WHERE security_id=$1 AND month=ANY($2::text[])", [security.id, [month,firstMonth], message]);
             if (/HTTP (401|403|429)|要求暫停/.test(message)) break;
           }
         }
@@ -461,12 +472,13 @@ export function createJobHandlers(pool: Pool, providers: JobProviders = upstream
 }
 
 export interface HistoryQueue { send(name: string, data: object, options: SendOptions): Promise<unknown>; }
-export async function enqueueHistory(boss: HistoryQueue, securityId: string, now = new Date()): Promise<void> {
+export async function enqueueHistory(boss: HistoryQueue, securityId: string, now = new Date(), years = 10, listedAt?: string): Promise<void> {
   if (!securityId.startsWith('TWSE:') && !securityId.startsWith('TPEx:')) {
     await boss.send('international.sync', {}, { singletonKey: GLOBAL_JOB_KEY, retryLimit: 0 });
     return;
   }
-  for (const month of historyMonths(now)) {
+  for (const month of historyMonths(now,years)) {
+    if (listedAt && month < listedAt.slice(0,7)) continue;
     await boss.send('history.backfill', { securityId, month }, { singletonKey: `${securityId}:${month}`, singletonSeconds: 3600, retryLimit: 2, retryDelay: 120, retryBackoff: true });
   }
 }

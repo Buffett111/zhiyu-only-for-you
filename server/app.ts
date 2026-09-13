@@ -12,7 +12,7 @@ import type { Identity } from './auth';
 import type { Config } from './config';
 import { modules, defaultModuleState, migrateModuleState, financeModule } from '../shared/modules';
 import type { User, Security, ModuleState, SourceStatus, Quote, Fundamentals, Digest } from '../shared/types';
-import { enqueueHistory } from './jobs';
+import { enqueueHistory, historyYears } from './jobs';
 import { searchYahoo, YahooUnavailable } from './providers/yahoo';
 import { regionOf, exchangeDate, timeZoneOf } from '../shared/markets';
 
@@ -22,7 +22,7 @@ interface AppOptions { pool: Pool; config: Config; queue?: JobQueue; verifyIdent
 const dateOnly = (v: string | Date) => typeof v === 'string' ? v.slice(0, 10) : v.toISOString().slice(0, 10);
 const iso = (v: Date | string | null) => v ? new Date(v).toISOString() : null;
 export function mapSecurity(row: Record<string, any>): Security {
-  return { id: row.id, symbol: row.symbol, name: row.name, market: row.market, assetType: row.asset_type, currency: row.currency, sector: row.sector || undefined, aliases: row.aliases || [], sourceUrl: row.source_url, active: row.active };
+  return { id: row.id, symbol: row.symbol, name: row.name, market: row.market, assetType: row.asset_type, currency: row.currency, sector: row.sector || undefined, aliases: row.aliases || [], sourceUrl: row.source_url, active: row.active,listedAt:row.listed_at || undefined };
 }
 function moduleState(row: Record<string, any>): ModuleState { return migrateModuleState({ moduleId: row.module_id, enabled: row.enabled, configVersion: row.config_version, config: row.config, widgets: row.widgets }); }
 function missingFundamentals(security: Security): Fundamentals {
@@ -32,8 +32,8 @@ function missingFundamentals(security: Security): Fundamentals {
 const watchSchema = z.object({ held: z.boolean(), interested: z.boolean(), group: z.string().trim().min(1).max(40).default('我的清單') }).strict();
 const moduleSchema = z.object({ enabled: z.boolean(), configVersion: z.literal(1), config: z.object({ translationTarget: z.enum(['zh-TW','en','ja']).optional() }).strict().default({}), widgets: z.array(z.enum(financeModule.widgets.map(w => w.id) as [string, ...string[]])).max(5).refine(v => new Set(v).size === v.length, '卡片不能重複') }).strict();
 function taipeiToday() { return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
-export function historyWindow(today: string, range: '1m' | '3m' | '1y') {
-  const monthsBack = { '1m': 1, '3m': 3, '1y': 12 }[range];
+export function historyWindow(today: string, range: '1m' | '3m' | '1y' | '3y' | '5y' | '10y' | '20y') {
+  const monthsBack = { '1m': 1, '3m': 3, '1y': 12, '3y':36, '5y':60, '10y':120, '20y':240 }[range];
   const current = new Date(`${today}T00:00:00Z`);
   const from = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - monthsBack, 1));
   const lastDay = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 0)).getUTCDate();
@@ -163,7 +163,7 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
     let queued = false;
     if (queue && inserted) {
-      try { await enqueueHistory(queue, request.params.id); await enqueue('digest.generate'); queued = true; }
+      try { await enqueueHistory(queue, request.params.id,new Date(),await historyYears(pool,request.params.id),(await getSecurity(request.params.id)).listedAt); await enqueue('digest.generate'); queued = true; }
       catch { /* Watchlist remains saved; scheduler catch-up will retry. */ }
     }
     return { saved: true, queued };
@@ -180,9 +180,24 @@ export async function buildApp({ pool, config, queue, verifyIdentity = createIde
     return { security, quote: q.rows[0]?.data || null, fundamentals: security.assetType === 'etf' ? missingFundamentals(security) : f.rows[0]?.data || missingFundamentals(security), news: n.rows.map(r => r.data),
       financialReports: reports.rows.map(r => r.data), contentStatus: progress.rows.map(r => ({kind:r.kind,status:r.status,lastAttempt:iso(r.last_attempt),lastSuccess:iso(r.last_success),error:r.error})) };
   });
+  app.post<{ Params: { id: string } }>('/api/v1/finance/securities/:id/history/request', { preHandler: requireFinance }, async request => {
+    const {years}=z.object({years:z.union([z.literal(5),z.literal(10),z.literal(20)])}).strict().parse(request.body);
+    if(!queue)throw new AccessError(503,'背景排程尚未連線，請稍後再試。');
+    const client=await pool.connect();let target=years;
+    try{
+      await client.query('BEGIN');
+      const module=(await client.query("SELECT enabled FROM user_modules WHERE user_id=$1 AND module_id='finance' FOR UPDATE",[request.zhiyuUser.id])).rows[0];
+      if(!module?.enabled)throw new AccessError(409,'請先啟用財經模組。');
+      if(!(await client.query('SELECT 1 FROM watchlist WHERE user_id=$1 AND security_id=$2',[request.zhiyuUser.id,request.params.id])).rowCount)throw new AccessError(404,'請先將此標的加入自己的追蹤清單。');
+      target=(await client.query(`INSERT INTO history_targets(security_id,years) VALUES($1,$2) ON CONFLICT(security_id) DO UPDATE SET years=GREATEST(history_targets.years,EXCLUDED.years),updated_at=now() RETURNING years`,[request.params.id,years])).rows[0].years;
+      await client.query('COMMIT');
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+    await enqueueHistory(queue,request.params.id,new Date(),target,(await getSecurity(request.params.id)).listedAt);
+    return {queued:true,years:target};
+  });
   app.get<{ Params: { id: string }; Querystring: { range?: string } }>('/api/v1/finance/securities/:id/history', { preHandler: requireFinance }, async request => {
     const security = await getSecurity(request.params.id);
-    const range = z.enum(['1m', '3m', '1y']).parse(request.query.range || '3m');
+    const range = z.enum(['1m', '3m', '1y', '3y','5y','10y','20y']).parse(request.query.range || '10y');
     const { requestedFrom, months } = historyWindow(exchangeDate(new Date(), timeZoneOf(security.market)), range);
     const rows = await pool.query('SELECT data FROM quotes WHERE security_id=$1 AND date >= $2 ORDER BY date', [request.params.id, requestedFrom]);
     const quotes: Quote[] = rows.rows.map(r => r.data);

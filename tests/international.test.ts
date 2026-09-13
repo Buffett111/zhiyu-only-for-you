@@ -68,7 +68,7 @@ describe('Yahoo symbol, price and transport boundaries', () => {
     const result = buildDigest({ date: '2026-09-11', now, expectedDate: '2026-09-11', securities: [us], quotes: [quote(us), quote(us, '2026-09-10')], news: [], financialUpdates: [], sourceWarnings: [] });
     expect(result.items[0].body).toContain('2026-09-10'); expect(result.items[0].body).toContain('USD'); expect(result.missing).toBe(0);
   });
-  it('queues one international refresh instead of thirteen Taiwan history queries', async () => {
+  it('queues one international refresh instead of monthly Taiwan history queries', async () => {
     const send = vi.fn().mockResolvedValue('job'); await enqueueHistory({ send }, jp.id, now);
     expect(send).toHaveBeenCalledTimes(1); expect(send.mock.calls[0][0]).toBe('international.sync');
   });
@@ -95,6 +95,28 @@ describe('international API and PostgreSQL integration', () => {
   });
   afterAll(async () => { await app?.close(); await pool.end(); if (!/^international_test_[a-f0-9]{32}$/.test(schema)) throw new Error('Unsafe schema'); await admin.query(`DROP SCHEMA "${schema}" CASCADE`); await admin.end(); });
   it('migrates existing schemas idempotently and rejects a wrong currency', async () => { await migrate(pool); await expect(pool.query("UPDATE securities SET currency='TWD' WHERE id='NASDAQ:AAPL'")).rejects.toThrow(); });
+  it('upgrades a previously fresh one-year snapshot to ten years without repeated fetches',async()=>{
+    await pool.query('INSERT INTO watchlist(user_id,security_id) VALUES($1,$2)',[userA,us.id]);
+    await pool.query('INSERT INTO quotes(security_id,date,data,fetched_at) VALUES($1,$2,$3,$4)',[us.id,'2026-09-11',quote(us),now]);
+    await pool.query("INSERT INTO history_progress(security_id,month,status,last_attempt) VALUES($1,'2026-09','complete',$2)",[us.id,now]);
+    await createJobHandlers(pool,providers).syncInternational(now);
+    expect(fetchHistory).toHaveBeenCalledWith(expect.objectContaining({id:us.id}),now,10);
+    await createJobHandlers(pool,providers).syncInternational(now);expect(fetchHistory).toHaveBeenCalledTimes(1);
+  });
+  it('allows longer history requests only for the caller’s tracked securities and retains the widest target',async()=>{
+    const send=vi.fn().mockResolvedValue('job');
+    const api=await buildApp({pool,config,logger:false,queue:{send},verifyIdentity:async request=>({email:request.headers['x-person']==='a'?'a@example.org':'b@example.org',displayName:'test',role:'member'})});
+    const request=(person:string,years:number)=>api.inject({method:'POST',url:'/api/v1/finance/securities/NASDAQ%3AAAPL/history/request',headers:{'x-person':person,origin,'content-type':'application/json'},payload:{years}});
+    try{
+      await pool.query('INSERT INTO watchlist(user_id,security_id) VALUES($1,$2)',[userA,us.id]);
+      expect((await request('b',20)).statusCode).toBe(404);expect(send).not.toHaveBeenCalled();
+      expect((await request('a',100)).statusCode).toBe(400);
+      expect((await request('a',20)).json()).toMatchObject({queued:true,years:20});
+      expect((await request('a',10)).json()).toMatchObject({years:20});
+      expect((await pool.query('SELECT years FROM history_targets WHERE security_id=$1',[us.id])).rows[0].years).toBe(20);
+      expect((await api.inject({url:'/api/v1/finance/securities/NASDAQ%3AAAPL/history?range=20y',headers:{'x-person':'a'}})).json().coverage.partial).toBe(true);
+    }finally{await api.close();}
+  });
   it('searches only the requested market and represents unavailable fundamentals honestly', async () => {
     expect((await app.inject({ url: '/api/v1/finance/securities?region=US&q=AAPL' })).json()[0]).toMatchObject({ id: us.id, currency: 'USD' });
     expect((await app.inject({ url: '/api/v1/finance/securities?region=TW&q=AAPL' })).json()).toEqual([]);
