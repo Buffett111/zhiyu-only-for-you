@@ -55,6 +55,6 @@ npm run dev
 - [AI 新聞摘要、儲存與費用試算](docs/ai-news.md)
 - [驗證紀錄](docs/verification.md)
 
-本機版本已通過 154 項測試、正式建置與真實資料管線驗證；完整範圍見[驗證紀錄](docs/verification.md)。公開部署需自行設定 Cloudflare 帳號、Access 邀請名單及本機 Tunnel；程式庫不包含可共用的服務帳號或部署憑證。
+本機版本已通過 158 項測試、正式建置與真實資料管線驗證；完整範圍見[驗證紀錄](docs/verification.md)。公開部署需自行設定 Cloudflare 帳號、Access 邀請名單及本機 Tunnel；程式庫不包含可共用的服務帳號或部署憑證。
 
 `.env`、`wrangler.local.jsonc`、資料、執行紀錄與備份均排除於 Git。請另行保存備份密語；缺少密語便無法解密。共享此站給親友時，依部署文件啟用正式登入。

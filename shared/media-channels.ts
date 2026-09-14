@@ -1,7 +1,7 @@
 export const CHANNEL_CATEGORIES=['音樂','遊戲','運動','科技','財經與商業','知識與教育','新聞與公共議題','電影與動漫','生活與娛樂','旅遊與戶外','飲食','藝術與文化','其他','無法判斷'] as const;
 export type ChannelCategory=typeof CHANNEL_CATEGORIES[number];
 export interface MediaChannel {
- key:string;name:string;iconUrl:string|null;url:string|null;estimatedSeconds:number|null;count:number;videos:number;share:number;
+ key:string;name:string;iconUrl:string|null;url:string|null;estimatedSeconds:number|null;timedEvents:number;count:number;videos:number;share:number;
  category:string;confidence:number|null;source:string;reviewed:boolean;curatorTags:string[];
  evidence:{id:string;title:string;quote:string}[];generatedAt:string|null;
 }

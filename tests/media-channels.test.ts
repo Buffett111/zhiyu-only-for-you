@@ -51,6 +51,11 @@ describe('public metadata and inspectable channel classification',()=>{
   const request=vi.fn(async(_u:any,init:any)=>{expect(init.body).not.toContain('watchedAt');expect(init.body).not.toContain('alice');return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({channels:[{key:samples[0].key,category:'科技' as const,confidence:.99,evidence:[{id:'abcdefghijk',quote:'not in title'}]}]})}]}]});});
   const r=await generateChannelLabels('fixture',samples,request);expect(r.channels[0]).toMatchObject({category:'無法判斷',evidence:[]});
  });
+ it('returns short channel totals in seconds and reports how many events have time evidence',async()=>{
+  await pool.query('UPDATE media_events SET actual_seconds=12 WHERE user_id=$1 AND video_id=$2',[alice,'abcdefghijk']);
+  const overview=await channelOverview(pool,alice,'all');
+  expect(overview.items[0]).toMatchObject({count:2,estimatedSeconds:12,timedEvents:1});
+ });
  it('requires opt-in, saves suggestions and corrections, restores originals, and denies other users writes',async()=>{
   const get=vi.fn(async(_key:string,samples:any[])=>({channels:samples.map(s=>({key:s.key,category:'科技' as const,confidence:.8,evidence:[{id:s.videos[0].id,title:s.videos[0].title,quote:'programming'}]})),usage:{inputTokens:100,outputTokens:30}}));
   expect(await classifyChannels(pool,config,alice,get)).toBe(0);expect(get).not.toHaveBeenCalled();await setChannelAutomation(pool,alice,true);
